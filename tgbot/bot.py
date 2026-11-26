@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import html
 import json
+import socket
 
 from aiogram import Bot, Router
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
 
+from .sampquery import query_server
 from .supervisor import RakSampSupervisor
 
 HELP = (
@@ -37,7 +39,8 @@ HELP = (
     "/cmd &lt;line&gt; — send any command (!pos x 100, !weapon 24, …)\n"
     "/log on|off — live log stream to this chat\n"
     "/logs [n] — last n log lines\n"
-    "/config — current instance config"
+    "/config — current instance config\n"
+    "/query [ip] [port] — UDP reachability probe (diagnose connect failures)"
 )
 
 
@@ -250,6 +253,40 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
     @r.message(Command("config"))
     async def h_config(message: Message):
         await message.answer(_code(json.dumps(sup.cfg.data, indent=2, ensure_ascii=False)))
+
+    @r.message(Command("query"))
+    async def h_query(message: Message, command: CommandObject):
+        args = (command.args or "").split()
+        if len(args) >= 2:
+            addr, port = args[0], args[1]
+        else:
+            addr = sup.cfg.data["server"]["addr"]
+            port = str(sup.cfg.data["server"]["port"])
+        if not port.isdigit():
+            await message.answer("usage: /query [ip] [port]")
+            return
+        await message.answer(f"querying <code>{html.escape(addr)}:{port}</code> over UDP…")
+        try:
+            info = await query_server(addr, int(port), timeout=3.0)
+        except (socket.timeout, TimeoutError):
+            await message.answer(
+                "🔴 <b>no UDP response in 3s</b>\n"
+                "Either outbound UDP is blocked on the host, or the server firewalls this "
+                "container's IP. SA-MP needs UDP — if the host blocks it, the client can't "
+                "connect. Try BotHost's «Зарубежный IP» toggle + redeploy, or ask support about UDP egress."
+            )
+            return
+        except Exception as e:
+            await message.answer(f"query error: {html.escape(str(e))}")
+            return
+        await message.answer(
+            "🟢 <b>UDP OK — server reachable</b>\n"
+            f"hostname: <b>{html.escape(info['hostname'])}</b>\n"
+            f"players: {info['players']}/{info['maxplayers']}  password: {info['password']}\n"
+            f"gamemode: {html.escape(info['gamemode'])}\n"
+            "UDP egress works. If /connect still fails, it's the game-protocol layer "
+            "(version/cookie or server-side play filtering), not the network."
+        )
 
     return r
 
