@@ -134,3 +134,39 @@ docker run --rm -p 8080:8080 \
   -e BOT_TOKEN=... -e ADMIN_IDS=123456789 \
   -v rakb-data:/app/data rakb-tg
 ```
+
+## Запасной вариант: VPS (если хостинг режет исходящий UDP)
+
+Образ самодостаточный: C++-runtime слинкован статически, нужен только glibc, всё
+управление идёт через Telegram long polling (входящий порт не требуется). Поэтому
+тот же образ запускается на любом VPS с Docker и открытым исходящим UDP — без
+привязки к BotHost и его `/app`-монтированию.
+
+```bash
+# на VPS (Debian/Ubuntu), Docker уже установлен
+git clone https://github.com/WeteroScript/Rakb.git
+cd Rakb
+git checkout arena/3b12d5df-rakb
+
+docker build -t rakb .
+docker run -d --name rakb --restart unless-stopped \
+  -e BOT_TOKEN="123456:ABC..." \
+  -e ADMIN_IDS="123456789" \
+  -e AUTOSTART="1" \
+  -v rakb-data:/app/data \
+  rakb
+```
+
+Проверка:
+
+```bash
+docker logs rakb        # строка health on 0.0.0.0:8080 | admins=... | bin=...
+```
+
+Затем в Telegram: `/nettest <ip> <port>` — на VPS с открытым UDP референсы и цель
+должны ответить 🟢, после чего `/connect <ip> <port> <nick>` подключается.
+
+Публичный порт открывать не нужно (health-эндпоинт слушает внутри контейнера;
+Telegram работает через исходящий polling). Если хочется health снаружи — добавьте
+`-p 8080:8080`. Большинство VPS-провайдеров (Hetzner, OVH, Vultr, DigitalOcean и т.п.)
+исходящий UDP не режут; для RU-серверов берите ноду ближе к ним ради пинга.
