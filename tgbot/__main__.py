@@ -25,7 +25,20 @@ async def main() -> None:
     settings = Settings.from_env()
     settings.validate()
 
-    sup = RakSampSupervisor(settings.raksamp_bin, settings.data_dir)
+    tunnel = None
+    if settings.tunnel_relay:
+        from .tunnel import Tunnel
+        host, _, port_s = settings.tunnel_relay.rpartition(":")
+        if not host or not port_s.isdigit():
+            raise SystemExit("TUNNEL_RELAY must be host:port (the relay/relay.py endpoint).")
+        if not settings.tunnel_token:
+            raise SystemExit("TUNNEL_TOKEN is required when TUNNEL_RELAY is set (must match RELAY_TOKEN).")
+        tunnel = Tunnel(host, int(port_s), settings.tunnel_token, settings.tunnel_local_port)
+        await tunnel.start()
+        logging.info("tunnel: local 127.0.0.1:%d -> relay %s (UDP-over-TCP)",
+                     settings.tunnel_local_port, settings.tunnel_relay)
+
+    sup = RakSampSupervisor(settings.raksamp_bin, settings.data_dir, tunnel=tunnel)
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     sup._broadcast = make_broadcast(bot)
 

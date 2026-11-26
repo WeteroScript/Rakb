@@ -23,10 +23,11 @@ _DISCONNECTED = ("Disconnected.", "Connection attempt failed", "connection was l
 
 
 class RakSampSupervisor:
-    def __init__(self, binary: str, data_dir: Path, broadcast=None):
+    def __init__(self, binary: str, data_dir: Path, broadcast=None, tunnel=None):
         self.binary = binary
         self.run_dir = data_dir / "run"
         self.cfg = InstanceConfig(data_dir)
+        self.tunnel = tunnel  # optional tgbot.tunnel.Tunnel (UDP-over-TCP)
         self.proc: asyncio.subprocess.Process | None = None
         self.lines: deque[str] = deque(maxlen=3000)
         self.connected = False
@@ -46,11 +47,25 @@ class RakSampSupervisor:
     def running(self) -> bool:
         return self.proc is not None and self.proc.returncode is None
 
+    def effective_server(self) -> tuple[str, int]:
+        """Address the client should actually dial. With a tunnel, that's the
+        local proxy; the real target is carried by the tunnel to the relay."""
+        if self.tunnel:
+            return ("127.0.0.1", self.tunnel.local_port)
+        srv = self.cfg.data["server"]
+        return (srv["addr"], int(srv["port"]))
+
     async def start(self) -> str:
         async with self._lock:
             if self.running:
                 return "already running"
-            self.cfg.write_xml(self.run_dir)
+            override = None
+            if self.tunnel:
+                await self.tunnel.start()
+                srv = self.cfg.data["server"]
+                await self.tunnel.set_target(srv["addr"], int(srv["port"]))
+                override = ("127.0.0.1", self.tunnel.local_port)
+            self.cfg.write_xml(self.run_dir, server_override=override)
             self.proc = await asyncio.create_subprocess_exec(
                 self.binary,
                 cwd=str(self.run_dir),
@@ -90,6 +105,8 @@ class RakSampSupervisor:
         for t in (self._reader, self._broadcaster):
             if t:
                 t.cancel()
+        if self.tunnel:
+            await self.tunnel.close()
 
     # ---- commands ----
     async def _send_raw(self, line: str) -> bool:

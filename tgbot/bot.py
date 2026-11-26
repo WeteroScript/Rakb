@@ -41,7 +41,8 @@ HELP = (
     "/logs [n] — last n log lines\n"
     "/config — current instance config\n"
     "/query [ip] [port] — UDP reachability probe (diagnose connect failures)\n"
-    "/nettest [ip] [port] — probe reference servers + target: host-block vs target-block"
+    "/nettest [ip] [port] — probe reference servers + target: host-block vs target-block\n"
+    "/tunnel — UDP-over-TCP tunnel status (when TUNNEL_RELAY is set)"
 )
 
 
@@ -122,18 +123,22 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
         nick = args[2] if len(args) > 2 else None
         pw = args[3] if len(args) > 3 else None
         sup.cfg.set_server(addr, int(port), nick, pw)
+        if sup.tunnel:
+            await sup.tunnel.set_target(addr, int(port))
+        ea, ep = sup.effective_server()
+        via = " via tunnel" if sup.tunnel else ""
         if sup.running:
-            line = f"!change_server {addr} {port}"
+            line = f"!change_server {ea} {ep}"
             if nick:
                 line += f" {nick}"
                 if pw:
                     line += f" {pw}"
             out = await sup.run_and_wait(line, timeout=9.0)
-            head = f"reconnecting to <code>{html.escape(addr)}:{port}</code>"
+            head = f"reconnecting to <code>{html.escape(addr)}:{port}</code>{via}"
         else:
             await sup.start()
             out = await sup.run_and_wait(None, timeout=9.0)
-            head = f"started against <code>{html.escape(addr)}:{port}</code>"
+            head = f"started against <code>{html.escape(addr)}:{port}</code>{via}"
         body = "\n".join(out) if out else "(нет вывода за 9с — проверь /status и /log on)"
         state = "🟢 connected" if sup.connected else "🟡 not connected yet — /status, /log on"
         await message.answer(head + "\n" + _code(body) + "\n" + state)
@@ -327,6 +332,26 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
                          "Ask BotHost support about UDP egress, or run on a VPS with open UDP. "
                          "A subdomain/webhook does NOT help — that's inbound HTTPS, not outbound UDP.")
         await message.answer("\n".join(lines))
+
+    @r.message(Command("tunnel"))
+    async def h_tunnel(message: Message):
+        if not sup.tunnel:
+            await message.answer(
+                "tunnel: <b>off</b>\nSet <code>TUNNEL_RELAY=host:port</code> and "
+                "<code>TUNNEL_TOKEN=...</code> (matching a relay/relay.py on a VPS with open UDP) "
+                "to carry SA-MP traffic over TCP when the host blocks UDP."
+            )
+            return
+        st = sup.tunnel.status()
+        icon = "🟢" if st["relay_connected"] else "🔴"
+        await message.answer(
+            f"{icon} <b>tunnel</b> (UDP-over-TCP)\n"
+            f"relay: <code>{html.escape(st['relay'])}</code>  connected: <b>{st['relay_connected']}</b>\n"
+            f"target: <code>{html.escape(st['target'] or '-')}</code>\n"
+            f"local proxy: <code>{st['local']}</code>\n"
+            f"bytes up/down: {st['bytes_up']}/{st['bytes_down']}\n"
+            f"last error: {html.escape(st['last_error'] or '-')}"
+        )
 
     return r
 

@@ -29,6 +29,9 @@ class Settings:
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("DATA_DIR", "/app/data")))
     raksamp_bin: str = field(default_factory=lambda: os.environ.get("RAKSAMP_BIN", "/opt/rakb/bin/raksamp"))
     autostart: bool = field(default_factory=lambda: os.environ.get("AUTOSTART", "").lower() in ("1", "true", "yes"))
+    tunnel_relay: str = field(default_factory=lambda: os.environ.get("TUNNEL_RELAY", "").strip())
+    tunnel_token: str = field(default_factory=lambda: os.environ.get("TUNNEL_TOKEN", "").strip())
+    tunnel_local_port: int = field(default_factory=lambda: _env_int("TUNNEL_LOCAL_PORT", 7777))
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -119,9 +122,10 @@ class InstanceConfig:
             self.data["server"]["password"] = password
         self.save()
 
-    def render_xml(self) -> str:
+    def render_xml(self, server_override: tuple[str, int] | None = None) -> str:
         d = self.data
         srv = d["server"]
+        s_addr, s_port = server_override if server_override else (srv["addr"], srv["port"])
         iv = d["intervals"]
         lg = d["log"]
         sr = d["sendrates"]
@@ -142,7 +146,7 @@ class InstanceConfig:
             "",
             "\t<server nickname=%s password=%s>%s:%d</server>"
             % (quoteattr(str(srv["nickname"])), quoteattr(str(srv["password"])),
-               escape(str(srv["addr"])), int(srv["port"])),
+               escape(str(s_addr)), int(s_port)),
             "",
             '\t<intervals spam="%d" fakekill="%d" lag="%d" joinflood="%d" chatflood="%d" classflood="%d" bulletflood="%d" />'
             % (iv["spam"], iv["fakekill"], iv["lag"], iv["joinflood"], iv["chatflood"], iv["classflood"], iv["bulletflood"]),
@@ -163,6 +167,6 @@ class InstanceConfig:
         lines.append("</RakSAMPClient>")
         return "\n".join(lines) + "\n"
 
-    def write_xml(self, run_dir: Path) -> None:
+    def write_xml(self, run_dir: Path, server_override: tuple[str, int] | None = None) -> None:
         run_dir.mkdir(parents=True, exist_ok=True)
-        (run_dir / "RakSAMPClient.xml").write_text(self.render_xml(), encoding="utf-8")
+        (run_dir / "RakSAMPClient.xml").write_text(self.render_xml(server_override), encoding="utf-8")
