@@ -1,0 +1,11 @@
+.git
+.gitignore
+*.zip.0*
+**/__pycache__
+**/*.pyc
+rakfk/.vs
+rakfk/**/obj
+rakfk/**/bin
+rakfk/**/Debug
+rakfk/**/Release
+*.md

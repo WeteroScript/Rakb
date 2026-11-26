@@ -1,0 +1,46 @@
+# Visual Studio / MSBuild artifacts
+.vs/
+[Oo]bj/
+[Bb]in/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.ipch
+*.tlog
+*.lastbuildstate
+*.suo
+*.user
+*.aps
+*.ncb
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.cachefile
+
+# Runtime output
+*.log
+RakSAMPClient.exe
+RakSAMPServer.exe
+
+# Split archive parts (source is unpacked under rakfk/)
+*.zip.0[0-9][0-9]
+
+# CMake / local build
+build/
+cmake-build-*/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Local runtime data (config/logs/state)
+data/
