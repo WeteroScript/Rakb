@@ -60,3 +60,37 @@ async def query_server(ip: str, port: int, timeout: float = 3.0) -> dict:
     loop = asyncio.get_running_loop()
     data = await loop.run_in_executor(None, _query_sync, ip, port, "i", timeout)
     return _parse_info(data)
+
+
+# Large, long-lived public SA-MP servers used purely as UDP-egress control probes.
+# If at least one answers, outbound UDP from the container works.
+REFERENCE_SERVERS = (
+    ("51.83.207.242", 7777),   # Diamond Role Play | Amber
+    ("192.99.251.103", 7777),  # Las Venturas Cops and Robbers
+    ("51.75.33.153", 7777),    # Diamond Role Play | Sapphire
+)
+
+
+async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
+    """Probe reference servers + the target to split host-block vs target-block."""
+    async def probe(host: str, p: int) -> bool:
+        try:
+            await query_server(host, p, timeout)
+            return True
+        except Exception:
+            return False
+
+    refs = await asyncio.gather(*(probe(h, p) for h, p in REFERENCE_SERVERS))
+    udp_ok = any(refs)
+    info = None
+    try:
+        info = await query_server(ip, port, timeout)
+        target_ok = True
+    except Exception:
+        target_ok = False
+    return {
+        "udp_ok": udp_ok,
+        "refs": list(zip(REFERENCE_SERVERS, refs)),
+        "target_ok": target_ok,
+        "info": info,
+    }

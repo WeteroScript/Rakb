@@ -14,7 +14,7 @@ from aiogram import Bot, Router
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
 
-from .sampquery import query_server
+from .sampquery import nettest, query_server
 from .supervisor import RakSampSupervisor
 
 HELP = (
@@ -40,7 +40,8 @@ HELP = (
     "/log on|off — live log stream to this chat\n"
     "/logs [n] — last n log lines\n"
     "/config — current instance config\n"
-    "/query [ip] [port] — UDP reachability probe (diagnose connect failures)"
+    "/query [ip] [port] — UDP reachability probe (diagnose connect failures)\n"
+    "/nettest [ip] [port] — probe reference servers + target: host-block vs target-block"
 )
 
 
@@ -287,6 +288,45 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             "UDP egress works. If /connect still fails, it's the game-protocol layer "
             "(version/cookie or server-side play filtering), not the network."
         )
+
+    @r.message(Command("nettest"))
+    async def h_nettest(message: Message, command: CommandObject):
+        args = (command.args or "").split()
+        if len(args) >= 2:
+            addr, port = args[0], args[1]
+        else:
+            addr = sup.cfg.data["server"]["addr"]
+            port = str(sup.cfg.data["server"]["port"])
+        if not port.isdigit():
+            await message.answer("usage: /nettest [ip] [port]")
+            return
+        await message.answer(
+            f"nettest: probing 3 reference servers + <code>{html.escape(addr)}:{port}</code> over UDP…"
+        )
+        res = await nettest(addr, int(port), timeout=3.0)
+        lines = ["<b>reference servers (UDP egress control):</b>"]
+        for (h, p), ok in res["refs"]:
+            lines.append(f"{'🟢' if ok else '🔴'} {h}:{p}")
+        lines.append("")
+        if res["target_ok"]:
+            info = res["info"] or {}
+            lines.append(
+                f"🟢 <b>target reachable</b> — {html.escape(info.get('hostname', '?'))} "
+                f"({info.get('players', '?')}/{info.get('maxplayers', '?')})"
+            )
+            lines.append("UDP egress AND the target both answer. If /connect still fails, it's the "
+                         "game-protocol layer (version/cookie/play filtering), not the network.")
+        elif res["udp_ok"]:
+            lines.append(f"🔴 <b>target silent, but UDP egress works</b> (references answered).")
+            lines.append("The host is NOT blocking UDP. The target itself is unreachable from here: "
+                         "wrong ip/port, server offline, or it firewalls this container's IP. "
+                         "Try BotHost «Зарубежный IP» + redeploy to change egress IP, or verify the address.")
+        else:
+            lines.append("🔴 <b>no UDP anywhere</b> — references AND target all silent.")
+            lines.append("Outbound UDP is blocked on the host (or all egress is). SA-MP needs UDP. "
+                         "Ask BotHost support about UDP egress, or run on a VPS with open UDP. "
+                         "A subdomain/webhook does NOT help — that's inbound HTTPS, not outbound UDP.")
+        await message.answer("\n".join(lines))
 
     return r
 
