@@ -124,11 +124,15 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
                 line += f" {nick}"
                 if pw:
                     line += f" {pw}"
-            await sup.send(line)
-            await message.answer(f"reconnecting to <code>{html.escape(addr)}:{port}</code>")
+            out = await sup.run_and_wait(line, timeout=9.0)
+            head = f"reconnecting to <code>{html.escape(addr)}:{port}</code>"
         else:
             await sup.start()
-            await message.answer(f"started against <code>{html.escape(addr)}:{port}</code>")
+            out = await sup.run_and_wait(None, timeout=9.0)
+            head = f"started against <code>{html.escape(addr)}:{port}</code>"
+        body = "\n".join(out) if out else "(нет вывода за 9с — проверь /status и /log on)"
+        state = "🟢 connected" if sup.connected else "🟡 not connected yet — /status, /log on"
+        await message.answer(head + "\n" + _code(body) + "\n" + state)
 
     @r.message(Command("nick"))
     async def h_nick(message: Message, command: CommandObject):

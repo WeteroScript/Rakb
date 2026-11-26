@@ -106,6 +106,7 @@ class InstanceConfig:
         return {}
 
     def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def set_server(self, addr: str, port: int, nickname: str | None = None,

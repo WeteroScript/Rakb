@@ -120,6 +120,29 @@ class RakSampSupervisor:
                 self._captures.remove(bucket)
         return bucket
 
+    async def run_and_wait(self, line: str | None, timeout: float = 9.0) -> list[str]:
+        """Send a command (or just watch, line=None) and collect log until a
+        connection state transition (connected / failed) or `timeout` elapses.
+        Used by /connect so the user sees the actual connection outcome."""
+        bucket: list[str] = []
+        self._captures.append(bucket)
+        try:
+            if line is not None and not await self._send_raw(line):
+                return ["(process is not running)"]
+            # Ignore the bare "Disconnected." that !change_server emits while tearing
+            # down the old connection; wait for the real outcome of the new attempt.
+            markers = _CONNECTED + tuple(m for m in _DISCONNECTED if m != "Disconnected.")
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                await asyncio.sleep(0.3)
+                if any(any(m in ln for m in markers) for ln in bucket):
+                    await asyncio.sleep(0.4)  # grab trailing lines (hostname, etc.)
+                    break
+        finally:
+            if bucket in self._captures:
+                self._captures.remove(bucket)
+        return bucket
+
     # ---- log handling ----
     async def _read_loop(self) -> None:
         assert self.proc and self.proc.stdout
