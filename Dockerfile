@@ -7,8 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY rakfk/ ./rakfk/
+# -j2 caps compile concurrency so the C++ build fits Basic's 1 GB RAM
+# (RakPeer.cpp/ReliabilityLayer.cpp are heavy; -j$(nproc) on a many-core
+# builder could OOM). Drop to -j1 if the build ever runs out of memory.
 RUN cmake -S rakfk -B /build -DCMAKE_BUILD_TYPE=Release \
-    && cmake --build /build -j"$(nproc)" \
+    && cmake --build /build -j2 \
     && mkdir -p /opt/rakb/bin \
     && cp /build/bin/raksamp /opt/rakb/bin/raksamp
 
