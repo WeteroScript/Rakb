@@ -14,7 +14,9 @@ from aiogram import Bot, Router
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
 
-from .sampquery import COMMON_SAMP_PORTS, diag, findport, nettest, query_server, selftest
+from .projects import VANILLA_JOIN_VERSION, identify
+from .sampquery import (COMMON_SAMP_PORTS, compare, diag, findport, nettest,
+                        query_server, selftest)
 from .supervisor import RakSampSupervisor
 
 HELP = (
@@ -46,6 +48,7 @@ HELP = (
     "/myip — the egress IP a game server sees (via STUN, also tests high-port UDP)\n"
     "/selftest — verify the 0.3.7 handshake against a live public server (read-only)\n"
     "/findport &lt;ip&gt; [port ...] — find which UDP port actually answers SA-MP\n"
+    "/project [ip] [port] — identify a mobile-CRMP project and compare with vanilla SA-MP\n"
     "/tunnel — UDP-over-TCP tunnel status (when TUNNEL_RELAY is set)"
 )
 
@@ -485,10 +488,85 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
                          "but filters play connections from this IP (anti-DDoS).")
         else:
             lines.append("🔴 <b>fully silent</b> — wrong port, server offline, or it drops this IP.")
-            lines.append(f"Check the port first: <code>/findport {html.escape(addr)}</code> "
-                         "probes the common SA-MP ports and shows which one actually answers. "
-                         "A wrong port looks exactly like an IP block.")
+            project = identify(res["resolved"] or addr, int(port))
+            if project:
+                lines.append(f"⚠️ <b>{html.escape(project.name)}</b> — a mobile-CRMP project played "
+                             "through its own launcher, not a stock SA-MP client. Its servers do not "
+                             "answer a vanilla 0.3.7 open-connection request.")
+                lines.append(f"Run <code>/project {html.escape(addr)} {port}</code> for the details "
+                             "and a side-by-side probe against a vanilla server.")
+            else:
+                lines.append(f"Check the port first: <code>/findport {html.escape(addr)}</code> "
+                             "probes the common SA-MP ports and shows which one actually answers. "
+                             "A wrong port looks exactly like an IP block.")
         await message.answer("\n".join(lines))
+
+    @r.message(Command("project"))
+    async def h_project(message: Message, command: CommandObject):
+        """Identify a known mobile-CRMP project and compare it with vanilla SA-MP."""
+        args = (command.args or "").split()
+        if args:
+            addr = args[0]
+            port = args[1] if len(args) > 1 else str(sup.cfg.data["server"]["port"])
+        else:
+            addr = sup.cfg.data["server"]["addr"]
+            port = str(sup.cfg.data["server"]["port"])
+        if not port.isdigit():
+            await message.answer("usage: /project [ip] [port]")
+            return
+        try:
+            resolved = socket.gethostbyname(addr)
+        except OSError as e:
+            await message.answer(f"🔴 DNS: {html.escape(str(e))}")
+            return
+        project = identify(resolved, int(port))
+        if not project:
+            await message.answer(
+                f"<code>{html.escape(resolved)}:{port}</code> is not a known mobile-CRMP project.\n"
+                "Use /diag for the handshake and /findport to locate the port."
+            )
+            return
+
+        await message.answer(
+            f"project: <b>{html.escape(project.name)}</b> — probing the target, "
+            f"{len(project.siblings)} sibling servers and vanilla SA-MP controls…"
+        )
+        res = await compare(resolved, int(port), project.siblings, timeout=2.5)
+        lines = [f"<b>{html.escape(project.name)}</b> — <code>{html.escape(resolved)}:{port}</code>",
+                 f"join version: <code>{project.join_version}</code> "
+                 f"(vanilla 0.3.7 uses <code>{VANILLA_JOIN_VERSION}</code>)", ""]
+        for r in res["results"]:
+            mark = "🟢" if r["any_reply"] else "🔴"
+            label = {"target": "target", "sibling": "sibling", "control": "vanilla control"}[r["role"]]
+            extra = ""
+            if r["info"]:
+                extra = f" — {html.escape(str(r['info'].get('hostname', '?')))}"
+            elif r["accepted"]:
+                extra = " — handshake accepted"
+            elif r["cookie"]:
+                extra = " — cookie challenge seen"
+            lines.append(f"{mark} {label} <code>{html.escape(r['host'])}:{r['port']}</code>{extra}")
+        lines.append("")
+        if res["project_replies"]:
+            lines.append("🟢 This project does answer us — the join layer is the next thing to look at.")
+        elif res["control_ok"]:
+            lines.append("🔴 <b>every server of this project is silent, while vanilla SA-MP answers "
+                         "from the same container.</b>")
+            lines.append("So egress, UDP and our 0.3.7 encoding are fine. This project's servers do not "
+                         "accept a stock client at all — the drop happens before any version field is "
+                         "sent, at the first open-connection request.")
+        else:
+            lines.append("🟡 Nothing answered, including the vanilla controls — run /nettest; "
+                         "the controls may be down right now.")
+        lines.append("")
+        lines.append("<b>What this project requires:</b>")
+        for note in project.notes:
+            lines.append(f"• {html.escape(note)}")
+        lines.append("")
+        lines.append("Sources: " + " ".join(
+            f'<a href="{html.escape(s)}">{html.escape(s.split("//")[1].split("/")[0])}</a>'
+            for s in project.sources))
+        await message.answer("\n".join(lines), disable_web_page_preview=True)
 
     @r.message(Command("findport"))
     async def h_findport(message: Message, command: CommandObject):

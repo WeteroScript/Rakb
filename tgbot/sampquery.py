@@ -264,6 +264,47 @@ COMMON_SAMP_PORTS = (
 )
 
 
+async def compare(target_ip: str, target_port: int, extra: tuple[str, ...] = (),
+                  control_port: int = 7777, timeout: float = 2.5) -> dict:
+    """Probe a target alongside sibling servers and a vanilla SA-MP control.
+
+    One silent target proves nothing on its own. Probing several servers of the
+    same project plus a known vanilla server from the same socket shows whether
+    the silence is specific to that project or applies to everything.
+    Read-only.
+    """
+    async def one(host: str, port: int, role: str) -> dict:
+        entry = {"host": host, "port": port, "role": role,
+                 "info": None, "accepted": False, "cookie": False}
+        try:
+            entry["info"] = await query_server(host, port, timeout)
+        except Exception:
+            pass
+        loop = asyncio.get_running_loop()
+        try:
+            steps = await loop.run_in_executor(None, _handshake_sync, host, port, timeout)
+            entry["accepted"] = any(g and g[0] == 25 for _, _, g in steps)
+            entry["cookie"] = any(g and g[0] == 26 for _, _, g in steps)
+        except Exception:
+            pass
+        entry["any_reply"] = entry["info"] is not None or entry["accepted"] or entry["cookie"]
+        return entry
+
+    jobs = [one(target_ip, target_port, "target")]
+    jobs += [one(h, target_port, "sibling") for h in extra]
+    jobs += [one(h, p, "control") for h, p in REFERENCE_SERVERS]
+    results = list(await asyncio.gather(*jobs))
+    return {
+        "results": results,
+        "target": results[0],
+        "siblings": [r for r in results if r["role"] == "sibling"],
+        "controls": [r for r in results if r["role"] == "control"],
+        "control_ok": any(r["any_reply"] for r in results if r["role"] == "control"),
+        "project_replies": any(r["any_reply"] for r in results
+                               if r["role"] in ("target", "sibling")),
+    }
+
+
 async def findport(ip: str, ports: tuple[int, ...] | None = None,
                    timeout: float = 2.0) -> dict:
     """Find which UDP port on a host actually answers the SA-MP query.
