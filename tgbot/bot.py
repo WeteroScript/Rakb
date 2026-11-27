@@ -14,7 +14,7 @@ from aiogram import Bot, Router
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
 
-from .sampquery import diag, nettest, query_server, selftest
+from .sampquery import COMMON_SAMP_PORTS, diag, findport, nettest, query_server, selftest
 from .supervisor import RakSampSupervisor
 
 HELP = (
@@ -45,6 +45,7 @@ HELP = (
     "/nettest [ip] [port] — probe reference servers + target: host-block vs target-block\n"
     "/myip — the egress IP a game server sees (via STUN, also tests high-port UDP)\n"
     "/selftest — verify the 0.3.7 handshake against a live public server (read-only)\n"
+    "/findport &lt;ip&gt; [port ...] — find which UDP port actually answers SA-MP\n"
     "/tunnel — UDP-over-TCP tunnel status (when TUNNEL_RELAY is set)"
 )
 
@@ -483,7 +484,56 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             lines.append("🟡 <b>query answers, game handshake silent</b> — the server allows queries "
                          "but filters play connections from this IP (anti-DDoS).")
         else:
-            lines.append("🔴 <b>fully silent</b> — wrong ip/port, server offline, or it drops this IP entirely.")
+            lines.append("🔴 <b>fully silent</b> — wrong port, server offline, or it drops this IP.")
+            lines.append(f"Check the port first: <code>/findport {html.escape(addr)}</code> "
+                         "probes the common SA-MP ports and shows which one actually answers. "
+                         "A wrong port looks exactly like an IP block.")
+        await message.answer("\n".join(lines))
+
+    @r.message(Command("findport"))
+    async def h_findport(message: Message, command: CommandObject):
+        """Find the UDP port a host actually answers SA-MP on."""
+        args = (command.args or "").split()
+        if not args:
+            await message.answer("usage: /findport <ip> [port ...]")
+            return
+        addr = args[0]
+        ports = None
+        if len(args) > 1:
+            if not all(a.isdigit() and 0 < int(a) < 65536 for a in args[1:]):
+                await message.answer("ports must be numbers in 1..65535")
+                return
+            ports = tuple(int(a) for a in args[1:])
+        shown = ports or COMMON_SAMP_PORTS
+        await message.answer(
+            f"findport: probing {len(shown)} UDP ports on <code>{html.escape(addr)}</code>…"
+        )
+        res = await findport(addr, ports, timeout=2.0)
+        if res["resolve_error"]:
+            await message.answer(f"🔴 DNS: {html.escape(res['resolve_error'])}")
+            return
+        lines = [f"<b>findport {html.escape(addr)}</b> → <code>{res['resolved']}</code>"]
+        if not res["answering"]:
+            lines.append(f"🔴 nothing answered on: {', '.join(str(p) for p in shown)}")
+            lines.append("Either the server is offline, or it uses a port outside this list — "
+                         "pass it explicitly: <code>/findport &lt;ip&gt; &lt;port&gt;</code>. "
+                         "If you know the port and it is still silent here, then it is filtering us.")
+        else:
+            for r in res["answering"]:
+                i = r["info"]
+                mark = "🟢" if r["accepted"] else "🟡"
+                lines.append(
+                    f"{mark} <b>:{r['port']}</b> — {html.escape(str(i.get('hostname', '?')))} "
+                    f"({i.get('players', '?')}/{i.get('maxplayers', '?')})"
+                    + (" — handshake accepted, joinable" if r["accepted"]
+                       else " — query answers, handshake did not complete")
+                )
+            lines.append("")
+            if res["joinable"]:
+                best = res["joinable"][0]["port"]
+                lines.append(f"Use <code>/connect {html.escape(addr)} {best} Nick</code>.")
+            else:
+                lines.append("Query answers but no handshake completed — send me this output.")
         await message.answer("\n".join(lines))
 
     @r.message(Command("tunnel"))

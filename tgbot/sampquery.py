@@ -255,6 +255,53 @@ async def diag(ip: str, port: int, timeout: float = 2.5) -> dict:
     return out
 
 
+# Ports SA-MP/CRMP servers commonly listen on. 7777 is the stock default, but plenty
+# of projects move it (5125 among them), and a wrong port looks exactly like an IP
+# block: every packet goes unanswered. Probing these turns that guess into a fact.
+COMMON_SAMP_PORTS = (
+    7777, 5125, 7778, 7779, 7776, 7780, 1337,
+    5000, 5555, 6666, 7000, 8000, 9000, 22005,
+)
+
+
+async def findport(ip: str, ports: tuple[int, ...] | None = None,
+                   timeout: float = 2.0) -> dict:
+    """Find which UDP port on a host actually answers the SA-MP query.
+
+    For every port that answers, also walk the 0.3.7 handshake so the result says
+    whether it is a joinable game server and not just something holding the port.
+    Read-only.
+    """
+    loop = asyncio.get_running_loop()
+    out: dict = {"ip": ip, "resolved": None, "resolve_error": None, "results": []}
+    try:
+        out["resolved"] = socket.gethostbyname(ip)
+    except OSError as e:
+        out["resolve_error"] = str(e)
+        return out
+    resolved = out["resolved"]
+    candidates = ports or COMMON_SAMP_PORTS
+
+    async def probe(p: int) -> dict:
+        entry = {"port": p, "info": None, "accepted": False, "steps": []}
+        try:
+            entry["info"] = await query_server(resolved, p, timeout)
+        except Exception:
+            return entry
+        try:
+            entry["steps"] = await loop.run_in_executor(
+                None, _handshake_sync, resolved, p, timeout)
+            entry["accepted"] = any(g and g[0] == 25 for _, _, g in entry["steps"])
+        except Exception:
+            pass
+        return entry
+
+    out["results"] = list(await asyncio.gather(*(probe(p) for p in candidates)))
+    out["answering"] = [r for r in out["results"] if r["info"] is not None]
+    out["joinable"] = [r for r in out["results"] if r["accepted"]]
+    return out
+
+
 async def selftest(timeout: float = 3.0) -> dict:
     """Verify the 0.3.7 handshake against a LIVE public server, not a mock.
 
