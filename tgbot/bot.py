@@ -43,6 +43,7 @@ HELP = (
     "/query [ip] [port] — UDP reachability probe (diagnose connect failures)\n"
     "/diag [ip] [port] — full 0.3.7 handshake probe: shows the server's raw answers\n"
     "/nettest [ip] [port] — probe reference servers + target: host-block vs target-block\n"
+    "/myip — the egress IP a game server sees (via STUN, also tests high-port UDP)\n"
     "/tunnel — UDP-over-TCP tunnel status (when TUNNEL_RELAY is set)"
 )
 
@@ -307,18 +308,25 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             await message.answer("usage: /nettest [ip] [port]")
             return
         await message.answer(
-            f"nettest: probing DNS + 3 SA-MP reference servers + <code>{html.escape(addr)}:{port}</code> over UDP…"
+            f"nettest: probing DNS + NTP + STUN (high ports) + SA-MP refs + "
+            f"<code>{html.escape(addr)}:{port}</code> over UDP…"
         )
         res = await nettest(addr, int(port), timeout=3.0)
         lines = ["<b>DNS over UDP (port 53):</b>"]
         for s, ok in res["dns"]:
             lines.append(f"{'🟢' if ok else '🔴'} {s}:53")
-        lines.append("<b>NTP over UDP (port 123, non-53):</b>")
+        lines.append("<b>NTP over UDP (port 123):</b>")
         for s, ok in res["ntp"]:
             lines.append(f"{'🟢' if ok else '🔴'} {s}:123")
+        lines.append("<b>STUN over UDP (high ports — same range as SA-MP):</b>")
+        for (h, p), mapped in res["stun"]:
+            lines.append(f"{'🟢' if mapped else '🔴'} {h}:{p}"
+                         + (f" → sees us as {html.escape(mapped)}" if mapped else ""))
         lines.append("<b>SA-MP reference servers:</b>")
         for (h, p), ok in res["refs"]:
             lines.append(f"{'🟢' if ok else '🔴'} {h}:{p}")
+        if res["egress_ip"]:
+            lines.append(f"\n<b>this container's egress IP:</b> <code>{html.escape(res['egress_ip'])}</code>")
         lines.append("")
         if res["target_ok"]:
             info = res["info"] or {}
@@ -328,25 +336,46 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             )
             lines.append("UDP works and the target answers. /connect should work; if it still fails "
                          "it's the game-protocol layer (version/cookie/play filtering), not the network.")
-        elif res["udp_ok"]:
-            lines.append("🟡 <b>UDP works (SA-MP references answered), but the target is silent.</b>")
-            lines.append("Egress + return path are fine. The target itself doesn't answer: wrong ip/port, "
-                         "server offline, or it firewalls this container's IP. Run /diag on the target — "
-                         "it walks the actual 0.3.7 game handshake and shows the server's raw answers.")
+        elif res["high_port_ok"] or res["udp_ok"]:
+            lines.append("🟡 <b>high-port UDP works, but the target is silent.</b>")
+            lines.append("STUN answered on 19302/3478, so this host does NOT block UDP on SA-MP's port "
+                         "range and the return path is fine. The target is dropping us specifically: "
+                         "it firewalls hosting/datacenter IPs, or the ip/port is wrong, or it's offline. "
+                         "Your home IP works because it isn't in a hosting range.")
+            if res["egress_ip"]:
+                lines.append(f"Give the server owner this IP to whitelist: <code>{html.escape(res['egress_ip'])}</code>.")
         elif res["dns_ok"] and res["ntp_ok"]:
-            lines.append("🟡 <b>UDP to arbitrary ports works (DNS + NTP answered), but SA-MP is silent.</b>")
-            lines.append("The host is NOT blocking UDP. Run /diag on the target — it walks the actual "
-                         "0.3.7 game handshake and shows whether the server answers connect packets "
-                         "from this IP at all.")
+            lines.append("🔴 <b>only low ports (53/123) get through — high-port UDP is filtered.</b>")
+            lines.append("DNS and NTP answer but every STUN server on 19302/3478 is silent. That is a host "
+                         "egress rule, not the game server: SA-MP needs UDP on 7777 and it never leaves. "
+                         "Send support this exact result and ask them to open outbound UDP to arbitrary "
+                         "high ports (test case: STUN binding request to stun.l.google.com:19302).")
         elif res["dns_ok"]:
-            lines.append("🟡 <b>DNS (53) works, but NTP (123) and SA-MP are silent.</b>")
-            lines.append("Looks like only DNS UDP is getting through (or NTP is blocked). Ask support to "
-                         "confirm arbitrary-port UDP with a non-53 example.")
+            lines.append("🔴 <b>only DNS (53) works</b> — NTP, STUN and SA-MP are all silent.")
+            lines.append("The host permits DNS UDP only. Ask support to open outbound UDP generally; "
+                         "test case: STUN to stun.l.google.com:19302.")
         else:
-            lines.append("🔴 <b>no UDP return anywhere</b> — DNS AND SA-MP all silent.")
+            lines.append("🔴 <b>no UDP return anywhere</b> — DNS, NTP, STUN and SA-MP all silent.")
             lines.append("Packets leave but replies never come back (or egress is blocked). This contradicts "
                          "support's 'UDP is open' — send them this exact result: a DNS query to 8.8.8.8:53 gets "
                          "no reply, so the UDP return path is being dropped.")
+        await message.answer("\n".join(lines))
+
+    @r.message(Command("myip"))
+    async def h_myip(message: Message):
+        """The egress IP the outside world sees — what a game server would firewall."""
+        await message.answer("myip: asking STUN servers over UDP…")
+        res = await nettest("127.0.0.1", 7777, timeout=3.0)
+        lines = []
+        for (h, p), mapped in res["stun"]:
+            lines.append(f"{'🟢' if mapped else '🔴'} {h}:{p}"
+                         + (f" → {html.escape(mapped)}" if mapped else ""))
+        if res["egress_ip"]:
+            lines.append(f"\n<b>egress IP:</b> <code>{html.escape(res['egress_ip'])}</code>")
+            lines.append("This is the address a game server sees. If it belongs to a hosting range, "
+                         "an anti-hosting firewall will drop it while your home IP works.")
+        else:
+            lines.append("\n🔴 no STUN answer — high-port UDP is not getting through (see /nettest).")
         await message.answer("\n".join(lines))
 
     @r.message(Command("diag"))

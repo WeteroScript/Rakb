@@ -81,6 +81,61 @@ DNS_RESOLVERS = ("8.8.8.8", "1.1.1.1")
 # is permitted (or NTP is blocked), i.e. a host egress restriction.
 NTP_SERVERS = ("time.google.com", "time.cloudflare.com")
 
+# STUN is the decisive probe: it answers on HIGH UDP ports (19302 / 3478), the same
+# port range SA-MP uses. DNS (53) and NTP (123) are well-known low ports that hosts
+# often permit individually, so they do NOT prove arbitrary-port UDP works.
+# A STUN reply also carries the container's real egress IP, which is what a game
+# server would see and could be firewalled by.
+STUN_SERVERS = (
+    ("stun.l.google.com", 19302),
+    ("stun1.l.google.com", 19302),
+    ("stun.cloudflare.com", 3478),
+    ("stun.stunprotocol.org", 3478),
+)
+
+STUN_MAGIC = 0x2112A442
+
+
+def _stun_query_sync(server: str, port: int, timeout: float) -> str | None:
+    """RFC 5389 Binding Request -> the XOR-MAPPED-ADDRESS IPv4, or None.
+
+    Returning the mapped address (not just True) proves a real STUN answer came
+    back and reveals which source IP the outside world sees for this container.
+    """
+    tid = random.randbytes(12)
+    pkt = struct.pack(">HHI", 0x0001, 0, STUN_MAGIC) + tid  # Binding Request, no attrs
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(pkt, (server, port))
+        data, _ = sock.recvfrom(2048)
+        if len(data) < 20:
+            return None
+        mtype, mlen, magic = struct.unpack(">HHI", data[:8])
+        if magic != STUN_MAGIC or data[8:20] != tid:
+            return None
+        if mtype != 0x0101:  # Binding Success Response
+            return None
+        off = 20
+        end = min(len(data), 20 + mlen)
+        fallback = None
+        while off + 4 <= end:
+            atype, alen = struct.unpack(">HH", data[off:off + 4])
+            val = data[off + 4:off + 4 + alen]
+            off += 4 + alen + ((4 - alen % 4) % 4)  # attributes are 32-bit padded
+            if len(val) < 8 or val[1] != 0x01:  # IPv4 family
+                continue
+            if atype == 0x0020:  # XOR-MAPPED-ADDRESS
+                addr = struct.unpack(">I", val[4:8])[0] ^ STUN_MAGIC
+                return socket.inet_ntoa(struct.pack(">I", addr))
+            if atype == 0x0001:  # MAPPED-ADDRESS (plain, older servers)
+                fallback = socket.inet_ntoa(val[4:8])
+        return fallback
+    except (socket.timeout, TimeoutError, OSError):
+        return None
+    finally:
+        sock.close()
+
 
 def _ntp_query_sync(server: str, timeout: float, port: int = 123) -> bool:
     # NTP client request: LI=0, VN=3, Mode=3 -> 0x1B, then 47 zero bytes (48 total).
@@ -221,14 +276,20 @@ async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
     async def ntp(server: str) -> bool:
         return await loop.run_in_executor(None, _ntp_query_sync, server, timeout)
 
-    refs, dns_res, ntp_res = await asyncio.gather(
+    async def stun(host: str, p: int) -> str | None:
+        return await loop.run_in_executor(None, _stun_query_sync, host, p, timeout)
+
+    refs, dns_res, ntp_res, stun_res = await asyncio.gather(
         asyncio.gather(*(probe(h, p) for h, p in REFERENCE_SERVERS)),
         asyncio.gather(*(dns(s) for s in DNS_RESOLVERS)),
         asyncio.gather(*(ntp(s) for s in NTP_SERVERS)),
+        asyncio.gather(*(stun(h, p) for h, p in STUN_SERVERS)),
     )
     udp_ok = any(refs)
     dns_ok = any(dns_res)
     ntp_ok = any(ntp_res)
+    egress_ip = next((r for r in stun_res if r), None)
+    high_port_ok = egress_ip is not None
     info = None
     try:
         info = await query_server(ip, port, timeout)
@@ -239,8 +300,11 @@ async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
         "udp_ok": udp_ok,
         "dns_ok": dns_ok,
         "ntp_ok": ntp_ok,
+        "high_port_ok": high_port_ok,
+        "egress_ip": egress_ip,
         "dns": list(zip(DNS_RESOLVERS, dns_res)),
         "ntp": list(zip(NTP_SERVERS, ntp_res)),
+        "stun": list(zip(STUN_SERVERS, stun_res)),
         "refs": list(zip(REFERENCE_SERVERS, refs)),
         "target_ok": target_ok,
         "info": info,
