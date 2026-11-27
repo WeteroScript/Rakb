@@ -130,23 +130,32 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             return
         nick = args[2] if len(args) > 2 else None
         pw = args[3] if len(args) > 3 else None
+        if pw == "-":
+            pw = ""  # explicit "no password"
+        prev = sup.cfg.data["server"]
+        target_changed = addr != prev["addr"] or int(port) != int(prev["port"])
+        # A different server must not inherit the previous server's password: it is
+        # sent inside ID_CONNECTION_REQUEST and a server that expects none can drop
+        # the request outright, which looks like a network failure.
+        if pw is None and target_changed:
+            pw = ""
         sup.cfg.set_server(addr, int(port), nick, pw)
         if sup.tunnel:
             await sup.tunnel.set_target(addr, int(port))
-        ea, ep = sup.effective_server()
         via = " via tunnel" if sup.tunnel else ""
+        # Nick, password and netdebug are read from RakSAMPClient.xml at startup, and
+        # !change_server cannot clear a password at all, so restart to make the XML
+        # authoritative instead of leaving the running client on stale settings.
         if sup.running:
-            line = f"!change_server {ea} {ep}"
-            if nick:
-                line += f" {nick}"
-                if pw:
-                    line += f" {pw}"
-            out = await sup.run_and_wait(line, timeout=9.0)
+            await sup.restart()
             head = f"reconnecting to <code>{html.escape(addr)}:{port}</code>{via}"
         else:
             await sup.start()
-            out = await sup.run_and_wait(None, timeout=9.0)
             head = f"started against <code>{html.escape(addr)}:{port}</code>{via}"
+        out = await sup.run_and_wait(None, timeout=9.0)
+        eff = sup.cfg.data["server"]
+        pw_state = f"set ({len(eff['password'])} chars)" if eff["password"] else "none"
+        head += f"\nnick: <code>{html.escape(str(eff['nickname']))}</code>, password: {pw_state}"
         body = "\n".join(out) if out else "(нет вывода за 9с — проверь /status и /log on)"
         state = "🟢 connected" if sup.connected else "🟡 not connected yet — /status, /log on"
         await message.answer(head + "\n" + _code(body) + "\n" + state)
