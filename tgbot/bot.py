@@ -306,10 +306,13 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             await message.answer("usage: /nettest [ip] [port]")
             return
         await message.answer(
-            f"nettest: probing 3 reference servers + <code>{html.escape(addr)}:{port}</code> over UDP…"
+            f"nettest: probing DNS + 3 SA-MP reference servers + <code>{html.escape(addr)}:{port}</code> over UDP…"
         )
         res = await nettest(addr, int(port), timeout=3.0)
-        lines = ["<b>reference servers (UDP egress control):</b>"]
+        lines = ["<b>DNS over UDP (return-path control):</b>"]
+        for s, ok in res["dns"]:
+            lines.append(f"{'🟢' if ok else '🔴'} {s}:53")
+        lines.append("<b>SA-MP reference servers:</b>")
         for (h, p), ok in res["refs"]:
             lines.append(f"{'🟢' if ok else '🔴'} {h}:{p}")
         lines.append("")
@@ -319,18 +322,23 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
                 f"🟢 <b>target reachable</b> — {html.escape(info.get('hostname', '?'))} "
                 f"({info.get('players', '?')}/{info.get('maxplayers', '?')})"
             )
-            lines.append("UDP egress AND the target both answer. If /connect still fails, it's the "
-                         "game-protocol layer (version/cookie/play filtering), not the network.")
+            lines.append("UDP works and the target answers. /connect should work; if it still fails "
+                         "it's the game-protocol layer (version/cookie/play filtering), not the network.")
         elif res["udp_ok"]:
-            lines.append(f"🔴 <b>target silent, but UDP egress works</b> (references answered).")
-            lines.append("The host is NOT blocking UDP. The target itself is unreachable from here: "
-                         "wrong ip/port, server offline, or it firewalls this container's IP. "
-                         "Try BotHost «Зарубежный IP» + redeploy to change egress IP, or verify the address.")
+            lines.append("🟡 <b>UDP works (SA-MP references answered), but the target is silent.</b>")
+            lines.append("Egress + return path are fine. The target itself doesn't answer: wrong ip/port, "
+                         "server offline, or it firewalls this container's IP. Try «Зарубежный IP» + redeploy, "
+                         "or verify the address (this IP is listed on port 7777, not 5125).")
+        elif res["dns_ok"]:
+            lines.append("🟡 <b>UDP works (DNS answered), but every SA-MP server is silent.</b>")
+            lines.append("Egress + return path are fine, so the host is NOT blocking UDP. SA-MP servers "
+                         "likely filter datacenter/hosting IPs. Try «Зарубежный IP» + redeploy to change the "
+                         "egress IP, or run from a residential connection (your PC).")
         else:
-            lines.append("🔴 <b>no UDP anywhere</b> — references AND target all silent.")
-            lines.append("Outbound UDP is blocked on the host (or all egress is). SA-MP needs UDP. "
-                         "Ask BotHost support about UDP egress, or run on a VPS with open UDP. "
-                         "A subdomain/webhook does NOT help — that's inbound HTTPS, not outbound UDP.")
+            lines.append("🔴 <b>no UDP return anywhere</b> — DNS AND SA-MP all silent.")
+            lines.append("Packets leave but replies never come back (or egress is blocked). This contradicts "
+                         "support's 'UDP is open' — send them this exact result: a DNS query to 8.8.8.8:53 gets "
+                         "no reply, so the UDP return path is being dropped.")
         await message.answer("\n".join(lines))
 
     @r.message(Command("tunnel"))

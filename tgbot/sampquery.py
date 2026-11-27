@@ -11,6 +11,7 @@ Doubles as a reachability probe for the container's outbound UDP:
 from __future__ import annotations
 
 import asyncio
+import random
 import socket
 import struct
 
@@ -70,9 +71,39 @@ REFERENCE_SERVERS = (
     ("51.75.33.153", 7777),    # Diamond Role Play | Sapphire
 )
 
+# Public DNS resolvers answer a UDP query from any source, so they are the most
+# reliable test of whether UDP egress AND the return path work at all.
+DNS_RESOLVERS = ("8.8.8.8", "1.1.1.1")
+
+
+def _dns_query_sync(server: str, timeout: float, port: int = 53) -> bool:
+    tid = random.randint(0, 65535)
+    # header: id, flags=0x0100 (recursion desired), QDCOUNT=1, rest 0
+    header = struct.pack(">HHHHHH", tid, 0x0100, 1, 0, 0, 0)
+    question = b"\x06google\x03com\x00" + struct.pack(">HH", 1, 1)  # google.com A IN
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(header + question, (server, port))
+        data, _ = sock.recvfrom(512)
+        if len(data) >= 12:
+            rid, flags = struct.unpack(">HH", data[:4])
+            return rid == tid and bool(flags & 0x8000)  # matching id + QR=response
+        return False
+    except (socket.timeout, TimeoutError, OSError):
+        return False
+    finally:
+        sock.close()
+
 
 async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
-    """Probe reference servers + the target to split host-block vs target-block."""
+    """Probe DNS resolvers + SA-MP reference servers + the target.
+
+    DNS answers but SA-MP silent -> UDP works, the game servers block this IP (or
+    are down). DNS also silent -> the UDP return path is dropped on the host.
+    """
+    loop = asyncio.get_running_loop()
+
     async def probe(host: str, p: int) -> bool:
         try:
             await query_server(host, p, timeout)
@@ -80,8 +111,15 @@ async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
         except Exception:
             return False
 
-    refs = await asyncio.gather(*(probe(h, p) for h, p in REFERENCE_SERVERS))
+    async def dns(server: str) -> bool:
+        return await loop.run_in_executor(None, _dns_query_sync, server, timeout)
+
+    refs, dns_res = await asyncio.gather(
+        asyncio.gather(*(probe(h, p) for h, p in REFERENCE_SERVERS)),
+        asyncio.gather(*(dns(s) for s in DNS_RESOLVERS)),
+    )
     udp_ok = any(refs)
+    dns_ok = any(dns_res)
     info = None
     try:
         info = await query_server(ip, port, timeout)
@@ -90,6 +128,8 @@ async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
         target_ok = False
     return {
         "udp_ok": udp_ok,
+        "dns_ok": dns_ok,
+        "dns": list(zip(DNS_RESOLVERS, dns_res)),
         "refs": list(zip(REFERENCE_SERVERS, refs)),
         "target_ok": target_ok,
         "info": info,
