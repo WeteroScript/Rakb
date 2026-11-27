@@ -49,6 +49,7 @@ HELP = (
     "/selftest — verify the 0.3.7 handshake against a live public server (read-only)\n"
     "/findport &lt;ip&gt; [port ...] — find which UDP port actually answers SA-MP\n"
     "/project [ip] [port] — identify a mobile-CRMP project and compare with vanilla SA-MP\n"
+    "/netdebug on|off — client handshake trace (packet ids, cookie, connection request)\n"
     "/tunnel — UDP-over-TCP tunnel status (when TUNNEL_RELAY is set)"
 )
 
@@ -500,6 +501,27 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
                              "probes the common SA-MP ports and shows which one actually answers. "
                              "A wrong port looks exactly like an IP block.")
         await message.answer("\n".join(lines))
+
+    @r.message(Command("netdebug"))
+    async def h_netdebug(message: Message, command: CommandObject):
+        """Toggle the client's handshake trace (packet ids, cookie, connection request)."""
+        arg = (command.args or "").strip().lower()
+        if arg not in ("on", "off"):
+            state = "on" if sup.cfg.data.get("netdebug", 0) else "off"
+            await message.answer(f"netdebug is <b>{state}</b>\nusage: /netdebug on|off")
+            return
+        sup.cfg.data["netdebug"] = 1 if arg == "on" else 0
+        sup.cfg.save()
+        # the flag is read from RakSAMPClient.xml at startup, so a restart applies it
+        res = await sup.restart()
+        await message.answer(
+            f"netdebug <b>{arg}</b> — {html.escape(str(res))}\n"
+            + ("Now /connect and then /logs 60: you'll see <code>[net] recv … id=0x..</code>, "
+               "<code>[net] cookie challenge=… -> answer=…</code> and "
+               "<code>[net] open-connection-reply -> sending connection-request</code>. "
+               "That shows exactly which step the server stops answering."
+               if arg == "on" else "Handshake trace off.")
+        )
 
     @r.message(Command("project"))
     async def h_project(message: Message, command: CommandObject):

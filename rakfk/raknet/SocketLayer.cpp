@@ -398,8 +398,9 @@ int SocketLayer::RecvFrom( const SOCKET s, RakPeer *rakPeer, int *errorCode )
 	if(len < 1 && len != -1) // thanks to n3ptun0
 		return 1;
 
-	 if (len>0)
-	  printf("Got packet on port %i\n",ntohs(sa.sin_port));
+	if (len > 0 && g_iNetDebug)
+		printf("[net] recv port=%i len=%i id=0x%02X\n",
+			ntohs(sa.sin_port), len, (unsigned char)data[0]);
 
 	if ( len == 0 )
 	{

@@ -46,6 +46,10 @@ int LoadSettings()
 		// get print_timestamps
 		rakSAMPElement->QueryIntAttribute("print_timestamps", (int *)&settings.iPrintTimestamps);
 
+		// handshake trace (bot: /netdebug on|off)
+		if (rakSAMPElement->QueryIntAttribute("netdebug", (int *)&settings.iNetDebug) == TIXML_SUCCESS)
+			g_iNetDebug = settings.iNetDebug ? 1 : 0;
+
 		// get fps simulation
 		rakSAMPElement->QueryIntAttribute("updatestats", (int *)&settings.iUpdateStats);
 

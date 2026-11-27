@@ -317,6 +317,11 @@ struct vehicle_entry
 
 extern struct vehicle_entry vehicle_list[VEHICLE_LIST_SIZE];
 
+/* Handshake trace, toggled from the bot (/netdebug). Off by default: it prints a
+   few lines per connection attempt, which is exactly what is needed to see where
+   a join stalls, and nothing at all once connected. */
+extern int g_iNetDebug;
+
 /* Restore default struct packing. The #pragma pack(1) above is required for the
    SA-MP wire structs, but it must NOT leak into headers included after common.h
    (tinyxml, RakNet) or their objects get a packed layout in this TU and a normal

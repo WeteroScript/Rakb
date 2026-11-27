@@ -58,6 +58,7 @@ DEFAULT_CONFIG: dict = {
     "class_id": 0,
     "manual_spawn": 0,
     "print_timestamps": 1,
+    "netdebug": 0,
     "updatestats": 1,
     "minfps": 20,
     "maxfps": 90,
@@ -141,8 +142,9 @@ class InstanceConfig:
             '               followplayer=%s followplayerwithvehicleid="%d" followXOffset="%s" followYOffset="%s" followZOffset="%s"'
             % (quoteattr(str(d["followplayer"])), d["followplayerwithvehicleid"],
                d["followXOffset"], d["followYOffset"], d["followZOffset"]),
-            '               updatestats="%d" minfps="%d" maxfps="%d" clientversion=%s>'
+            '               updatestats="%d" minfps="%d" maxfps="%d" clientversion=%s'
             % (d["updatestats"], d["minfps"], d["maxfps"], quoteattr(str(d["clientversion"]))),
+            '               netdebug="%d">' % int(d.get("netdebug", 0)),
             "",
             "\t<server nickname=%s password=%s>%s:%d</server>"
             % (quoteattr(str(srv["nickname"])), quoteattr(str(srv["password"])),

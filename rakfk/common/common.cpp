@@ -4,6 +4,8 @@
 
 #include "main.h"
 
+int g_iNetDebug = 0;
+
 /* IDs must be sequential */
 struct vehicle_entry vehicle_list[VEHICLE_LIST_SIZE] =
 {	// model_id, vehicle class, vehicle name, passenger seats

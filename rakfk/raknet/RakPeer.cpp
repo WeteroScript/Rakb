@@ -3832,6 +3832,10 @@ void ProcessNetworkPacket(const unsigned int binaryAddress, const unsigned short
 
 					temp.Write((unsigned char)ID_CONNECTION_REQUEST);
 
+					if (g_iNetDebug)
+						printf("[net] open-connection-reply -> sending connection-request (passlen=%u)\n",
+							(unsigned)rcs->outgoingPasswordLength);
+
 					if (rcs->outgoingPasswordLength > 0)
 						temp.Write((char*)rcs->outgoingPassword, rcs->outgoingPasswordLength);
 
@@ -3998,8 +4002,13 @@ void ProcessNetworkPacket(const unsigned int binaryAddress, const unsigned short
 		// memcpy keeps this ARM-safe (no unaligned WORD access).
 		unsigned short cookie;
 		memcpy(&cookie, &data[1], sizeof(cookie));
+		unsigned short challenge = cookie;
 		cookie ^= (unsigned short)NETCODE_CONNCOOKIELULZ;
 		memcpy(&c[1], &cookie, sizeof(cookie));
+
+		if (g_iNetDebug)
+			printf("[net] cookie challenge=0x%04X -> answer=0x%04X (xor 0x%04X)\n",
+				(unsigned)challenge, (unsigned)cookie, (unsigned)NETCODE_CONNCOOKIELULZ);
 
 		unsigned i;
 		for (i = 0; i < rakPeer->messageHandlerList.Size(); i++)
@@ -4302,6 +4311,11 @@ bool RakPeer::RunUpdateCycle(void)
 		// port-XOR payload was dropped in 0.3.7-RC5-1). Send zeroes.
 		c[1] = 0;
 		c[2] = 0;
+
+			if (g_iNetDebug)
+				printf("[net] send open-connection-request attempt=%u %02X %02X %02X\n",
+					(unsigned)rcs->requestsMade,
+					(unsigned char)c[0], (unsigned char)c[1], (unsigned char)c[2]);
 
 			unsigned i;
 			for (i = 0; i < messageHandlerList.Size(); i++)

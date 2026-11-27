@@ -62,6 +62,7 @@ struct stSettings
 	int iClassID;
 	int iManualSpawn;
 	int iPrintTimestamps;
+	int iNetDebug;   /* handshake trace, toggled by /netdebug */
 	
 	int iUpdateStats;
 	int iMinFPS;
