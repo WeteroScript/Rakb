@@ -75,6 +75,27 @@ REFERENCE_SERVERS = (
 # reliable test of whether UDP egress AND the return path work at all.
 DNS_RESOLVERS = ("8.8.8.8", "1.1.1.1")
 
+# Public NTP servers answer on UDP port 123 (a NON-53 port). If DNS (53) works but
+# SA-MP is silent, NTP tells us whether arbitrary-port UDP works: NTP answers ->
+# the game servers filter this hosting IP; NTP also silent -> likely only DNS UDP
+# is permitted (or NTP is blocked), i.e. a host egress restriction.
+NTP_SERVERS = ("time.google.com", "time.cloudflare.com")
+
+
+def _ntp_query_sync(server: str, timeout: float, port: int = 123) -> bool:
+    # NTP client request: LI=0, VN=3, Mode=3 -> 0x1B, then 47 zero bytes (48 total).
+    pkt = b"\x1b" + 47 * b"\x00"
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(pkt, (server, port))
+        data, _ = sock.recvfrom(1024)
+        return len(data) >= 48
+    except (socket.timeout, TimeoutError, OSError):
+        return False
+    finally:
+        sock.close()
+
 
 def _dns_query_sync(server: str, timeout: float, port: int = 53) -> bool:
     tid = random.randint(0, 65535)
@@ -114,12 +135,17 @@ async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
     async def dns(server: str) -> bool:
         return await loop.run_in_executor(None, _dns_query_sync, server, timeout)
 
-    refs, dns_res = await asyncio.gather(
+    async def ntp(server: str) -> bool:
+        return await loop.run_in_executor(None, _ntp_query_sync, server, timeout)
+
+    refs, dns_res, ntp_res = await asyncio.gather(
         asyncio.gather(*(probe(h, p) for h, p in REFERENCE_SERVERS)),
         asyncio.gather(*(dns(s) for s in DNS_RESOLVERS)),
+        asyncio.gather(*(ntp(s) for s in NTP_SERVERS)),
     )
     udp_ok = any(refs)
     dns_ok = any(dns_res)
+    ntp_ok = any(ntp_res)
     info = None
     try:
         info = await query_server(ip, port, timeout)
@@ -129,7 +155,9 @@ async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
     return {
         "udp_ok": udp_ok,
         "dns_ok": dns_ok,
+        "ntp_ok": ntp_ok,
         "dns": list(zip(DNS_RESOLVERS, dns_res)),
+        "ntp": list(zip(NTP_SERVERS, ntp_res)),
         "refs": list(zip(REFERENCE_SERVERS, refs)),
         "target_ok": target_ok,
         "info": info,

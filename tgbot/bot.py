@@ -309,9 +309,12 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             f"nettest: probing DNS + 3 SA-MP reference servers + <code>{html.escape(addr)}:{port}</code> over UDP…"
         )
         res = await nettest(addr, int(port), timeout=3.0)
-        lines = ["<b>DNS over UDP (return-path control):</b>"]
+        lines = ["<b>DNS over UDP (port 53):</b>"]
         for s, ok in res["dns"]:
             lines.append(f"{'🟢' if ok else '🔴'} {s}:53")
+        lines.append("<b>NTP over UDP (port 123, non-53):</b>")
+        for s, ok in res["ntp"]:
+            lines.append(f"{'🟢' if ok else '🔴'} {s}:123")
         lines.append("<b>SA-MP reference servers:</b>")
         for (h, p), ok in res["refs"]:
             lines.append(f"{'🟢' if ok else '🔴'} {h}:{p}")
@@ -329,11 +332,15 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             lines.append("Egress + return path are fine. The target itself doesn't answer: wrong ip/port, "
                          "server offline, or it firewalls this container's IP. Try «Зарубежный IP» + redeploy, "
                          "or verify the address (this IP is listed on port 7777, not 5125).")
+        elif res["dns_ok"] and res["ntp_ok"]:
+            lines.append("🟡 <b>UDP to arbitrary ports works (DNS + NTP answered), but SA-MP is silent.</b>")
+            lines.append("The host is NOT blocking UDP. SA-MP servers filter datacenter/hosting IPs. "
+                         "Try «Зарубежный IP» + redeploy to change the egress IP, or run from your PC "
+                         "(residential IP — the same one you play SA-MP from, so it isn't filtered).")
         elif res["dns_ok"]:
-            lines.append("🟡 <b>UDP works (DNS answered), but every SA-MP server is silent.</b>")
-            lines.append("Egress + return path are fine, so the host is NOT blocking UDP. SA-MP servers "
-                         "likely filter datacenter/hosting IPs. Try «Зарубежный IP» + redeploy to change the "
-                         "egress IP, or run from a residential connection (your PC).")
+            lines.append("🟡 <b>DNS (53) works, but NTP (123) and SA-MP are silent.</b>")
+            lines.append("Looks like only DNS UDP is getting through (or NTP is blocked). Ask support to "
+                         "confirm arbitrary-port UDP with a non-53 example, or run from your PC (residential IP).")
         else:
             lines.append("🔴 <b>no UDP return anywhere</b> — DNS AND SA-MP all silent.")
             lines.append("Packets leave but replies never come back (or egress is blocked). This contradicts "
