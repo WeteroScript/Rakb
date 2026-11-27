@@ -95,7 +95,9 @@ if(WIN32)
 else()
     # Legacy code: string-literal -> char*, old narrowing, etc. Keep it building
     # without drowning in warnings; real errors still fail the build.
-    target_compile_options(raksamp PRIVATE -fpermissive -w -O2)
+    # -fsigned-char: x86 treats plain char as signed; ARM defaults to unsigned.
+    # The SA-MP wire code assumes signed char, so force it for ARM/phone builds.
+    target_compile_options(raksamp PRIVATE -fpermissive -w -O2 -fsigned-char)
     find_package(Threads REQUIRED)
     target_link_libraries(raksamp PRIVATE Threads::Threads)
     # clock_gettime lives in librt on older glibc; harmless when it is in libc.
