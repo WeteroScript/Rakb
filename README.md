@@ -47,9 +47,26 @@ BOT_TOKEN=... ADMIN_IDS=<your_id> \
 Then in Telegram: `/run`, `/connect <ip> <port> [nick] [pass]`, `/auth <pass>`, `/spawn`,
 `/log on`, `/cmd !players`, … See `DEPLOY.md` for the full command list and BotHost setup.
 
+## Protocol regression test
+
+Runs the real binary against a mock 0.3.7 server and checks the whole join sequence
+(cookie → connection request → accepted → `RPC_ClientJoin` → `AUTH_KEY`), plus the
+`/diag` probe codec:
+
+```bash
+RAKSAMP_BIN=$PWD/build/bin/raksamp python3 tests/test_samp037_protocol.py
+```
+
+Exit status 0 means every check passed. It also runs clean under
+`-fsanitize=address`, which is how the `DS_List` and `gen_gpci` bugs below were found.
+
 ## Notes
 
 - The binary is static-linked against libstdc++/libgcc; the runtime image needs only glibc.
 - Config/state/logs persist in `/app/data` (BotHost volume); code lives in `/opt/rakb` to
   dodge BotHost's `/app` Git bind-mount.
 - SA-MP uses UDP — the host must allow outbound UDP.
+- Two Linux-only crashes are fixed and covered by the test above: `DataStructures::List`
+  grew an empty list with an unguarded `memcpy` + `delete[]` (GCC drops the null check
+  because `memcpy` is declared `nonnull`, so the array cookie was read at `0-8`), and
+  `gen_gpci`/`BIG_NUM_MUL` used `unsigned long` limbs, which are 8 bytes here instead of 4.

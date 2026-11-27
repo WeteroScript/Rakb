@@ -66,9 +66,9 @@ async def query_server(ip: str, port: int, timeout: float = 3.0) -> dict:
 # Large, long-lived public SA-MP servers used purely as UDP-egress control probes.
 # If at least one answers, outbound UDP from the container works.
 REFERENCE_SERVERS = (
-    ("51.83.207.242", 7777),   # Diamond Role Play | Amber
-    ("192.99.251.103", 7777),  # Las Venturas Cops and Robbers
-    ("51.75.33.153", 7777),    # Diamond Role Play | Sapphire
+    ("185.169.134.188", 7777),  # RADMIR RolePlay 08
+    ("185.169.134.22", 7771),   # Samp-Rp.Ru 09
+    ("46.39.225.193", 7778),    # GTA LEAGUE
 )
 
 # Public DNS resolvers answer a UDP query from any source, so they are the most
@@ -115,6 +115,89 @@ def _dns_query_sync(server: str, timeout: float, port: int = 53) -> bool:
         return False
     finally:
         sock.close()
+
+
+# --- SA-MP 0.3.7 game-connection handshake (the bytes the client itself sends) ---
+# Every client->server datagram is obfuscated with samp_encode (see sampnetencr).
+# Server->client datagrams are plaintext.
+# C->S  18 00 00            ID_OPEN_CONNECTION_REQUEST (24)
+# S->C  1a <cookie:2>       ID_OPEN_CONNECTION_COOKIE (26) challenge
+# C->S  18 <cookie^0x6969>  challenge answer
+# S->C  19 ..               ID_OPEN_CONNECTION_REPLY (25) -> handshake accepted
+ID_OPEN_CONNECTION_REQUEST = 24
+ID_OPEN_CONNECTION_COOKIE = 26
+ID_OPEN_CONNECTION_REPLY = 25
+ID_CONNECTION_ATTEMPT_FAILED = 29
+ID_NO_FREE_INCOMING_CONNECTIONS = 31
+COOKIE_XOR = 0x6969  # NETCODE_CONNCOOKIELULZ
+
+
+def _handshake_sync(ip: str, port: int, timeout: float) -> list:
+    """Walk the 0.3.7 handshake with a raw socket, recording every exchange.
+
+    Returns a list of (label, sent_plaintext_bytes, received_bytes_or_None).
+    Outgoing packets are samp-encoded exactly like the client does; a connected
+    UDP socket keeps only the target's replies.
+    """
+    from .sampnetencr import samp_encode
+
+    resolved = socket.gethostbyname(ip)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    sock.connect((resolved, port))
+    steps = []
+
+    def exchange(payload: bytes, label: str):
+        sock.send(samp_encode(payload, port))
+        try:
+            data = sock.recv(4096)
+        except (socket.timeout, TimeoutError):
+            data = None
+        steps.append((label, payload, data))
+        return data
+
+    try:
+        request = bytes([ID_OPEN_CONNECTION_REQUEST, 0x00, 0x00])
+        reply = exchange(request, "open connection request")
+        if reply is None:
+            # some anti-DDoS frontends drop the first packet; retry once
+            reply = exchange(request, "open connection request (retry)")
+        if reply and reply[0] == ID_OPEN_CONNECTION_COOKIE and len(reply) >= 3:
+            cookie = struct.unpack("<H", reply[1:3])[0]
+            answer = bytes([ID_OPEN_CONNECTION_REQUEST]) + struct.pack("<H", cookie ^ COOKIE_XOR)
+            reply = exchange(answer, "cookie answer (xor 0x6969)")
+            if reply is None or reply[0] == ID_OPEN_CONNECTION_COOKIE:
+                # no answer, or the server re-challenged: retry the answer once
+                reply = exchange(answer, "cookie answer (retry)")
+        return steps
+    finally:
+        sock.close()
+
+
+async def diag(ip: str, port: int, timeout: float = 2.5) -> dict:
+    """Full in-bot diagnosis of one server: query + raw 0.3.7 handshake.
+
+    Distinguishes: server silent (IP filtered / offline), query-only answering
+    (play connection filtered), cookie challenge refused, handshake accepted.
+    """
+    loop = asyncio.get_running_loop()
+    out = {"ip": ip, "port": port, "resolved": None, "resolve_error": None,
+           "info": None, "query_error": None, "steps": [], "handshake_error": None}
+    try:
+        out["resolved"] = socket.gethostbyname(ip)
+    except OSError as e:
+        out["resolve_error"] = str(e)
+        return out
+    try:
+        out["info"] = await query_server(out["resolved"], port, timeout)
+    except Exception as e:
+        out["query_error"] = f"{type(e).__name__}: {e}"
+    try:
+        out["steps"] = await loop.run_in_executor(
+            None, _handshake_sync, out["resolved"], port, timeout)
+    except Exception as e:
+        out["handshake_error"] = f"{type(e).__name__}: {e}"
+    return out
 
 
 async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:

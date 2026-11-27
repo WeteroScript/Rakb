@@ -214,10 +214,18 @@ namespace DataStructures
 			//	new_array[ counter ] = listArray[ counter ];
 
 			// Don't call constructors, assignment operators, etc.
-			memcpy(new_array, listArray, list_size*sizeof(list_type));
+			// Linux/GCC fix: memcpy is declared __attribute__((nonnull(1,2))), so an
+			// unconditional memcpy(new_array, listArray, 0) lets the optimizer assume
+			// listArray != 0 and drop the null check inside delete[].  For element types
+			// with a non-trivial destructor (e.g. DataStructures::RangeNode) delete[] then
+			// reads the array cookie at listArray-8 and frees (0-8) -> heap corruption on
+			// the very first Insert() into an empty list.  Guard both calls explicitly.
+			if (list_size > 0 && listArray != 0)
+				memcpy(new_array, listArray, list_size*sizeof(list_type));
 
 			// set old array to point to the newly allocated and twice as large array
-			delete[] listArray;
+			if (listArray != 0)
+				delete[] listArray;
 
 			listArray = new_array;
 		}
@@ -259,10 +267,18 @@ namespace DataStructures
 			//		new_array[ counter ] = listArray[ counter ];
 
 			// Don't call constructors, assignment operators, etc.
-			memcpy(new_array, listArray, list_size*sizeof(list_type));
+			// Linux/GCC fix: memcpy is declared __attribute__((nonnull(1,2))), so an
+			// unconditional memcpy(new_array, listArray, 0) lets the optimizer assume
+			// listArray != 0 and drop the null check inside delete[].  For element types
+			// with a non-trivial destructor (e.g. DataStructures::RangeNode) delete[] then
+			// reads the array cookie at listArray-8 and frees (0-8) -> heap corruption on
+			// the very first Insert() into an empty list.  Guard both calls explicitly.
+			if (list_size > 0 && listArray != 0)
+				memcpy(new_array, listArray, list_size*sizeof(list_type));
 
 			// set old array to point to the newly allocated and twice as large array
-			delete[] listArray;
+			if (listArray != 0)
+				delete[] listArray;
 
 			listArray = new_array;
 		}
@@ -297,10 +313,13 @@ namespace DataStructures
 				//	new_array[ counter ] = listArray[ counter ];
 
 				// Don't call constructors, assignment operators, etc.
-				memcpy(new_array, listArray, list_size*sizeof(list_type));
+				// See the null guards in Insert() above: required for GCC/Linux.
+				if (list_size > 0 && listArray != 0)
+					memcpy(new_array, listArray, list_size*sizeof(list_type));
 
 				// set old array to point to the newly allocated array
-				delete[] listArray;
+				if (listArray != 0)
+					delete[] listArray;
 
 				listArray = new_array;
 			}
@@ -404,10 +423,13 @@ namespace DataStructures
 		//	new_array[ counter ] = listArray[ counter ];
 
 		// Don't call constructors, assignment operators, etc.
-		memcpy(new_array, listArray, list_size*sizeof(list_type));
+		// See the null guards in Insert() above: required for GCC/Linux.
+		if (list_size > 0 && listArray != 0)
+			memcpy(new_array, listArray, list_size*sizeof(list_type));
 
 		// set old array to point to the newly allocated array
-		delete[] listArray;
+		if (listArray != 0)
+			delete[] listArray;
 
 		listArray = new_array;
 	}

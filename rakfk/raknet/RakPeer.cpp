@@ -1027,7 +1027,7 @@ void RakPeer::DeallocatePacket(Packet* packet)
 		return;
 
 	if (packet->deleteData)
-		delete packet->data;
+		delete[] packet->data; // every producer allocates with new[] (RakPeer.cpp:4475, ReliabilityLayer.cpp:1937/2142/2272/2333)
 	free(packet);
 }
 
@@ -1175,6 +1175,10 @@ bool RakPeer::RPC(int* uniqueID, const char* data, unsigned int bitLength, Packe
 		return false;
 	}
 
+	// 0.3.7 RPC ids are a single byte (the 0.3.DL ids were 9-bit).
+	if (*uniqueID > 256)
+		return false;
+
 	unsigned* sendList;
 
 	unsigned sendListSize;
@@ -1250,8 +1254,8 @@ bool RakPeer::RPC(int* uniqueID, const char* data, unsigned int bitLength, Packe
 
 		outgoingBitStream.Write((unsigned char)ID_RPC);
 
-		// No mapping, so write the encoded RPC name
-		outgoingBitStream.WriteBits((unsigned char*)(uniqueID), 9, true);
+		// No mapping, so write the encoded RPC name (one byte on 0.3.7)
+		outgoingBitStream.Write((BYTE)(*uniqueID));
 
 
 		outgoingBitStream.WriteCompressed(bitLength);
@@ -2842,7 +2846,7 @@ bool RakPeer::HandleRPCPacket(const char* data, int length, PlayerID playerId)
 	if (data[0] == ID_TIMESTAMP)
 		incomingBitStream.IgnoreBits(8 * (sizeof(RakNetTime) + sizeof(unsigned char)));
 
-	incomingBitStream.ReadBits((unsigned char*)&uniqueIdentifier, 9, true);
+	incomingBitStream.Read((char*)&uniqueIdentifier, 1);
 	rpcIndex = rpcMap.GetIndexFromFunctionName(uniqueIdentifier);
 	if (incomingBitStream.ReadCompressed(rpcParms.numberOfBitsOfData) == false)
 	{
@@ -3987,12 +3991,15 @@ void ProcessNetworkPacket(const unsigned int binaryAddress, const unsigned short
 			rakPeer->messageHandlerList[i]->OnDirectSocketReceive(data, length * 8, playerId);
 
 		unsigned char c[3];
-
-		//c[0] = ID_OPEN_CONNECTION_REQUEST;
 		c[0] = ID_OPEN_CONNECTION_REQUEST;
-		c[1] = 'B';
-		c[2] = 'R';
-		//*(WORD*)&c[1] = (*(WORD*)&data[1] ^ NETCODE_CONNCOOKIELULZ);
+
+		// 0.3.7: answer the server's 2-byte cookie challenge with cookie ^
+		// NETCODE_CONNCOOKIELULZ (0x6969), exactly like the real SA-MP client.
+		// memcpy keeps this ARM-safe (no unaligned WORD access).
+		unsigned short cookie;
+		memcpy(&cookie, &data[1], sizeof(cookie));
+		cookie ^= (unsigned short)NETCODE_CONNCOOKIELULZ;
+		memcpy(&c[1], &cookie, sizeof(cookie));
 
 		unsigned i;
 		for (i = 0; i < rakPeer->messageHandlerList.Size(); i++)
@@ -4289,10 +4296,12 @@ bool RakPeer::RunUpdateCycle(void)
 			rcs->requestsMade++;
 			rcs->nextRequestTime = timeMS + 1000;
 
-			char c[3]; // 0.3d RAKSAMP HACK PONPON
-			c[0] = ID_OPEN_CONNECTION_REQUEST;
-			c[1] = 'B';
-			c[2] = 'R';
+		char c[3];
+		c[0] = ID_OPEN_CONNECTION_REQUEST;
+		// 0.3.7: the two trailing bytes are ignored by the server (the old
+		// port-XOR payload was dropped in 0.3.7-RC5-1). Send zeroes.
+		c[1] = 0;
+		c[2] = 0;
 
 			unsigned i;
 			for (i = 0; i < messageHandlerList.Size(); i++)
@@ -4741,7 +4750,7 @@ bool RakPeer::RunUpdateCycle(void)
 						delete[] data;
 					}
 					else if ((unsigned char)(data)[0] == ID_CONNECTION_REQUEST_ACCEPTED && byteSize == sizeof(unsigned char) + sizeof(unsigned int) + sizeof(unsigned short) + sizeof(PlayerIndex)
-						/* RAKSAMP HACK HACK HACK*/ + sizeof(unsigned short))
+						/* 0.3.7: ID + binaryAddress + port + playerIndex + challenge */ + sizeof(unsigned short) + sizeof(unsigned short))
 					{
 
 						// Make sure this connection accept is from someone we wanted to connect to
@@ -4761,14 +4770,12 @@ bool RakPeer::RunUpdateCycle(void)
 							PlayerID externalID;
 							PlayerIndex playerIndex;
 
-							RakNet::BitStream inBitStream((unsigned char*)data, byteSize, false);
-							inBitStream.IgnoreBits(8); // ID_CONNECTION_REQUEST_ACCEPTED
-							inBitStream.IgnoreBits(32); // challeng
-							externalID.binaryAddress = -1009632336;
-							//	inBitStream.Read(remotePort);
-								//inBitStream.Read(externalID.binaryAddress);
-							externalID.port = 1729;
-							playerIndex = 2;
+						RakNet::BitStream inBitStream((unsigned char*)data, byteSize, false);
+						inBitStream.IgnoreBits(8); // ID_CONNECTION_REQUEST_ACCEPTED
+						// 0.3.7 layout: binaryAddress(4) port(2) playerIndex(2) challenge(4)
+						inBitStream.Read(externalID.binaryAddress);
+						inBitStream.Read(externalID.port);
+						inBitStream.Read(playerIndex);
 
 							// Find a free remote system struct to use
 							//						RakNet::BitStream casBitS(data, byteSize, false);

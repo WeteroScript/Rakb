@@ -66,6 +66,7 @@ set(RAKSAMP_SOURCES
     client/src/netgame.cpp
     client/src/netrpc.cpp
     client/src/rcon.cpp
+    client/src/samp_auth_037.cpp
     client/src/window.cpp
     client/src/xmlsets.cpp
 )

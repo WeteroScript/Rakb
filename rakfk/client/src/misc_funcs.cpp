@@ -512,18 +512,21 @@ const struct vehicle_entry *gta_vehicle_get_by_id ( int id )
 
 int gen_gpci(char buf[64], unsigned long factor) /* by bartekdvd */
 {
-	unsigned char out[6*4] = {0};
+	// 6 x 32-bit limbs = 24 bytes. The original used unsigned long and wrote
+	// out[6*4] (byte 25) past the end; on Linux unsigned long is 8 bytes, so
+	// BIG_NUM_MUL also read 40 and wrote 48 bytes here. Both are fixed by
+	// using fixed-width limbs and staying inside the 24-byte buffer.
+	uint32_t out[6] = {0};
+	unsigned char* out_bytes = (unsigned char*)out;
 
 	static const char alphanum[] =
 		"0123456789"
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 	for (int i = 0; i < 6*4; ++i)
-		out[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
+		out_bytes[i] = alphanum[rand() % (sizeof(alphanum) - 1)];
 
-	out[6*4] = 0;
-
-	BIG_NUM_MUL((unsigned long*)out, (unsigned long*)out, factor);
+	BIG_NUM_MUL(out, out, (uint32_t)factor);
 
 	unsigned int notzero = 0;
 	buf[0] = '0'; buf[1] = '\0';
@@ -533,8 +536,8 @@ int gen_gpci(char buf[64], unsigned long factor) /* by bartekdvd */
 	int pos = 0;
 	for (int i = 0; i < 24; i++)
 	{
-		unsigned char tmp = out[i] >> 4;
-		unsigned char tmp2 = out[i]&0x0F;
+		unsigned char tmp = out_bytes[i] >> 4;
+		unsigned char tmp2 = out_bytes[i]&0x0F;
 		
 		if (notzero || tmp)
 		{

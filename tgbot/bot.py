@@ -14,7 +14,7 @@ from aiogram import Bot, Router
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
 
-from .sampquery import nettest, query_server
+from .sampquery import diag, nettest, query_server
 from .supervisor import RakSampSupervisor
 
 HELP = (
@@ -41,6 +41,7 @@ HELP = (
     "/logs [n] — last n log lines\n"
     "/config — current instance config\n"
     "/query [ip] [port] — UDP reachability probe (diagnose connect failures)\n"
+    "/diag [ip] [port] — full 0.3.7 handshake probe: shows the server's raw answers\n"
     "/nettest [ip] [port] — probe reference servers + target: host-block vs target-block\n"
     "/tunnel — UDP-over-TCP tunnel status (when TUNNEL_RELAY is set)"
 )
@@ -330,22 +331,87 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
         elif res["udp_ok"]:
             lines.append("🟡 <b>UDP works (SA-MP references answered), but the target is silent.</b>")
             lines.append("Egress + return path are fine. The target itself doesn't answer: wrong ip/port, "
-                         "server offline, or it firewalls this container's IP. Try «Зарубежный IP» + redeploy, "
-                         "or verify the address (this IP is listed on port 7777, not 5125).")
+                         "server offline, or it firewalls this container's IP. Run /diag on the target — "
+                         "it walks the actual 0.3.7 game handshake and shows the server's raw answers.")
         elif res["dns_ok"] and res["ntp_ok"]:
             lines.append("🟡 <b>UDP to arbitrary ports works (DNS + NTP answered), but SA-MP is silent.</b>")
-            lines.append("The host is NOT blocking UDP. SA-MP servers filter datacenter/hosting IPs. "
-                         "Try «Зарубежный IP» + redeploy to change the egress IP, or run from your PC "
-                         "(residential IP — the same one you play SA-MP from, so it isn't filtered).")
+            lines.append("The host is NOT blocking UDP. Run /diag on the target — it walks the actual "
+                         "0.3.7 game handshake and shows whether the server answers connect packets "
+                         "from this IP at all.")
         elif res["dns_ok"]:
             lines.append("🟡 <b>DNS (53) works, but NTP (123) and SA-MP are silent.</b>")
             lines.append("Looks like only DNS UDP is getting through (or NTP is blocked). Ask support to "
-                         "confirm arbitrary-port UDP with a non-53 example, or run from your PC (residential IP).")
+                         "confirm arbitrary-port UDP with a non-53 example.")
         else:
             lines.append("🔴 <b>no UDP return anywhere</b> — DNS AND SA-MP all silent.")
             lines.append("Packets leave but replies never come back (or egress is blocked). This contradicts "
                          "support's 'UDP is open' — send them this exact result: a DNS query to 8.8.8.8:53 gets "
                          "no reply, so the UDP return path is being dropped.")
+        await message.answer("\n".join(lines))
+
+    @r.message(Command("diag"))
+    async def h_diag(message: Message, command: CommandObject):
+        args = (command.args or "").split()
+        if len(args) >= 2:
+            addr, port = args[0], args[1]
+        else:
+            addr = sup.cfg.data["server"]["addr"]
+            port = str(sup.cfg.data["server"]["port"])
+        if not port.isdigit():
+            await message.answer("usage: /diag [ip] [port]")
+            return
+        await message.answer(
+            f"diag: walking the 0.3.7 handshake with <code>{html.escape(addr)}:{port}</code> "
+            "(query + raw connect packets, up to ~15 s)…"
+        )
+        res = await diag(addr, int(port))
+        lines = [f"<b>diag {html.escape(addr)}:{port}</b>"]
+        if res["resolve_error"]:
+            lines.append(f"🔴 DNS: {html.escape(res['resolve_error'])}")
+            await message.answer("\n".join(lines))
+            return
+        lines.append(f"resolved: <code>{res['resolved']}</code>")
+        if res["info"]:
+            i = res["info"]
+            lines.append(
+                f"🟢 query: {html.escape(i.get('hostname', '?'))} "
+                f"({i.get('players', '?')}/{i.get('maxplayers', '?')})"
+            )
+        else:
+            lines.append(f"🔴 query silent ({html.escape(res['query_error'] or 'timeout')})")
+        lines.append("<b>handshake:</b>")
+        if res["handshake_error"]:
+            lines.append(f"🔴 {html.escape(res['handshake_error'])}")
+        for label, sent, got in res["steps"]:
+            if got is None:
+                lines.append(f"🔴 {html.escape(label)}: <code>{sent.hex(' ')}</code> → no reply")
+            else:
+                lines.append(
+                    f"🟢 {html.escape(label)}: <code>{sent.hex(' ')}</code> → <code>{got.hex(' ')}</code>"
+                )
+        accepted = any(g and g[0] == 25 for _, _, g in res["steps"])   # ID_OPEN_CONNECTION_REPLY
+        refused = any(g and g[0] == 29 for _, _, g in res["steps"])    # ID_CONNECTION_ATTEMPT_FAILED
+        full = any(g and g[0] == 31 for _, _, g in res["steps"])       # ID_NO_FREE_INCOMING_CONNECTIONS
+        cookie = any(g and g[0] == 26 for _, _, g in res["steps"])     # ID_OPEN_CONNECTION_COOKIE
+        any_reply = any(g for _, _, g in res["steps"])
+        lines.append("")
+        if accepted:
+            lines.append("🟢 <b>handshake accepted</b> — the server lets this IP connect. "
+                         "If /connect still fails, the problem is inside the client — send me this output.")
+        elif full:
+            lines.append("🟡 <b>server is full</b> (no free slots) — this IP is not filtered.")
+        elif refused:
+            lines.append("🔴 <b>server actively refuses</b> this IP (ban / anti-DDoS filter).")
+        elif cookie:
+            lines.append("🟡 <b>cookie challenge seen, answer not accepted</b> — the server sees us "
+                         "but drops the handshake. Send me this output.")
+        elif any_reply:
+            lines.append("🟡 <b>server replies, but not with a handshake</b> — send me this output.")
+        elif res["info"]:
+            lines.append("🟡 <b>query answers, game handshake silent</b> — the server allows queries "
+                         "but filters play connections from this IP (anti-DDoS).")
+        else:
+            lines.append("🔴 <b>fully silent</b> — wrong ip/port, server offline, or it drops this IP entirely.")
         await message.answer("\n".join(lines))
 
     @r.message(Command("tunnel"))

@@ -48,4 +48,8 @@ void MakeOrthMatrix(float fInW, float fInX, float fInY, float fInZ,
 					float *m10, float *m11, float *m12,
 					float *m20, float *m21, float *m22);
 
-void BIG_NUM_MUL(unsigned long in[5], unsigned long out[6], unsigned long factor);
+// 32-bit limbs are mandatory: the original Windows code used unsigned long,
+// which is 8 bytes on Linux/ARM and made this read 40 / write 48 bytes into a
+// 24-byte caller buffer.
+#include <stdint.h>
+void BIG_NUM_MUL(uint32_t in[5], uint32_t out[6], uint32_t factor);

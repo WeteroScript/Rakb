@@ -3,6 +3,7 @@
 */
 
 #include "main.h"
+#include "samp_auth_037.h"
 
 extern int iFollowingPassenger, iFollowingDriver;
 extern int iDrunkLevel, iMoney, iLocalPlayerSkin;
@@ -135,7 +136,7 @@ void Packet_AUTH_KEY(Packet* p, RakClientInterface* pRakClient)
 	bsAuth.Read(szAuth, byteAuthLen);
 	szAuth[byteAuthLen] = '\0';
 	char szAuthKey[260];
-	sub_4D368C(szAuthKey, szAuth);
+	gen_auth_key(szAuthKey, szAuth);
 	RakNet::BitStream bsKey;
 	BYTE byteAuthKeyLen = (BYTE)strlen(szAuthKey);
 	bsKey.Write((BYTE)ID_AUTH_KEY);
@@ -151,24 +152,25 @@ void Packet_ConnectionSucceeded(Packet* p, RakClientInterface* pRakClient)
 	PLAYERID myPlayerID;
 	unsigned int uiChallenge;
 
+	// 0.3.7 layout: ID(1) binaryAddress(4) port(2) playerIndex(2) challenge(4)
 	bsSuccAuth.IgnoreBits(8); // ID_CONNECTION_REQUEST_ACCEPTED
-	bsSuccAuth.Read(uiChallenge);
+	bsSuccAuth.IgnoreBits(32); // binaryAddress
 	bsSuccAuth.IgnoreBits(16); // port
 
-	myPlayerID = 2;
+	bsSuccAuth.Read(myPlayerID);
 
 	g_myPlayerID = myPlayerID;
 	playerInfo[myPlayerID].iIsConnected = 1;
 
 	strcpy(playerInfo[myPlayerID].szPlayerName, g_szNickName);
 
-
+	bsSuccAuth.Read(uiChallenge);
 
 	settings.uiChallange = uiChallenge;
 
 	Log("Connected. Joining the game...");
 
-	int iVersion = 0xFDE;
+	int iVersion = NETGAME_VERSION;
 	unsigned int uiClientChallengeResponse = uiChallenge ^ iVersion;
 	BYTE byteMod = 1;
 
@@ -182,16 +184,18 @@ void Packet_ConnectionSucceeded(Packet* p, RakClientInterface* pRakClient)
 
 	RakNet::BitStream bsSend;
 
-	bsSend.Write(uiClientChallengeResponse);
-	BYTE androidVersion = 1;
-	bsSend.Write(androidVersion);
-	int clientver = 1362;
-	bsSend.Write(clientver);
-	BYTE fingerPrint = 0;
-	bsSend.Write(fingerPrint);
+	// 0.3.7 RPC_ClientJoin: version, mod, name, challenge response, auth key,
+	// client version string (the 0.3.DL android/fingerprint layout is rejected).
+	bsSend.Write(iVersion);
+	bsSend.Write(byteMod);
 	bsSend.Write(byteNameLen);
 	bsSend.Write(g_szNickName, byteNameLen);
-	pRakClient->RPC(&RPC_ClientJoin, &bsSend, HIGH_PRIORITY, UNRELIABLE_SEQUENCED, 0, FALSE, UNASSIGNED_NETWORK_ID, NULL);
+	bsSend.Write(uiClientChallengeResponse);
+	bsSend.Write(byteAuthBSLen);
+	bsSend.Write(auth_bs, byteAuthBSLen);
+	bsSend.Write(iClientVerLen);
+	bsSend.Write(settings.szClientVersion, iClientVerLen);
+	pRakClient->RPC(&RPC_ClientJoin, &bsSend, HIGH_PRIORITY, RELIABLE, 0, FALSE, UNASSIGNED_NETWORK_ID, NULL);
 
 	iAreWeConnected = 1;
 }
