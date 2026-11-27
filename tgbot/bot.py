@@ -14,7 +14,7 @@ from aiogram import Bot, Router
 from aiogram.filters import BaseFilter, Command, CommandObject
 from aiogram.types import Message
 
-from .sampquery import diag, nettest, query_server
+from .sampquery import diag, nettest, query_server, selftest
 from .supervisor import RakSampSupervisor
 
 HELP = (
@@ -44,6 +44,7 @@ HELP = (
     "/diag [ip] [port] — full 0.3.7 handshake probe: shows the server's raw answers\n"
     "/nettest [ip] [port] — probe reference servers + target: host-block vs target-block\n"
     "/myip — the egress IP a game server sees (via STUN, also tests high-port UDP)\n"
+    "/selftest — verify the 0.3.7 handshake against a live public server (read-only)\n"
     "/tunnel — UDP-over-TCP tunnel status (when TUNNEL_RELAY is set)"
 )
 
@@ -359,6 +360,48 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
             lines.append("Packets leave but replies never come back (or egress is blocked). This contradicts "
                          "support's 'UDP is open' — send them this exact result: a DNS query to 8.8.8.8:53 gets "
                          "no reply, so the UDP return path is being dropped.")
+        await message.answer("\n".join(lines))
+
+    @r.message(Command("selftest"))
+    async def h_selftest(message: Message):
+        """Prove the 0.3.7 handshake on a live public server (read-only)."""
+        await message.answer(
+            "selftest: walking the real 0.3.7 cookie exchange against live public "
+            "SA-MP servers (does not touch your instance)…"
+        )
+        res = await selftest(timeout=3.0)
+        lines = []
+        for t in res["tried"]:
+            head = f"<b>{html.escape(t['host'])}:{t['port']}</b>"
+            if t["info"] is None:
+                lines.append(f"🔴 {head} — silent ({html.escape(t['query_error'] or 'no reply')})")
+                continue
+            info = t["info"]
+            lines.append(f"🟢 {head} — {html.escape(str(info.get('hostname', '?')))} "
+                         f"({info.get('players', '?')}/{info.get('maxplayers', '?')})")
+            for label, sent, got in t["steps"]:
+                mark = "🟢" if got else "🔴"
+                lines.append(f"   {mark} {html.escape(label)}: "
+                             f"<code>{sent.hex(' ')}</code> → "
+                             f"<code>{got.hex(' ') if got else 'no reply'}</code>")
+        lines.append("")
+        if res["verified"]:
+            lines.append("🟢 <b>client protocol verified on live traffic.</b>")
+            lines.append("A real public server accepted our encoded open-connection request and "
+                         "returned ID_OPEN_CONNECTION_REPLY (25). The 0.3.7 encoding, cookie "
+                         "0x6969 answer and wire ids are correct against a real server, not just "
+                         "a mock. If your target stays silent, it is dropping this container's IP.")
+            lines.append("To see the full join with the real binary: "
+                         "<code>/connect &lt;that ip&gt; &lt;port&gt; Nick</code>.")
+        elif res["reachable"]:
+            lines.append("🟡 <b>a live server answers queries but not the game handshake.</b>")
+            lines.append("UDP and the query protocol work. The play connection is filtered for this "
+                         "IP (common on public servers), so this cannot confirm the handshake. "
+                         "Try /selftest again later or /connect to a server you control.")
+        else:
+            lines.append("🔴 <b>no reference server answered at all.</b>")
+            lines.append("They may be down or all filter hosting IPs. Run /nettest — if STUN is green "
+                         "there, egress is fine and this is target-side filtering.")
         await message.answer("\n".join(lines))
 
     @r.message(Command("myip"))

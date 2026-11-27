@@ -255,6 +255,42 @@ async def diag(ip: str, port: int, timeout: float = 2.5) -> dict:
     return out
 
 
+async def selftest(timeout: float = 3.0) -> dict:
+    """Verify the 0.3.7 handshake against a LIVE public server, not a mock.
+
+    A target that stays silent cannot tell us whether our client or the target is
+    at fault. This walks the real cookie exchange against reference servers until
+    one answers, so "our encoding is wrong" can be ruled out on live traffic.
+    Read-only: it never touches the running instance or its config.
+    """
+    tried: list[dict] = []
+    for host, port in REFERENCE_SERVERS:
+        entry: dict = {"host": host, "port": port, "info": None,
+                       "query_error": None, "steps": [], "accepted": False}
+        try:
+            entry["info"] = await query_server(host, port, timeout)
+        except Exception as e:
+            entry["query_error"] = f"{type(e).__name__}: {e}"
+            tried.append(entry)
+            continue  # silent server proves nothing, try the next one
+        loop = asyncio.get_running_loop()
+        try:
+            entry["steps"] = await loop.run_in_executor(
+                None, _handshake_sync, host, port, timeout)
+        except Exception as e:
+            entry["query_error"] = f"{type(e).__name__}: {e}"
+        entry["accepted"] = any(
+            g and g[0] == 25 for _, _, g in entry["steps"])  # ID_OPEN_CONNECTION_REPLY
+        tried.append(entry)
+        if entry["accepted"]:
+            break
+    return {
+        "tried": tried,
+        "verified": any(t["accepted"] for t in tried),
+        "reachable": [t for t in tried if t["info"] is not None],
+    }
+
+
 async def nettest(ip: str, port: int, timeout: float = 3.0) -> dict:
     """Probe DNS resolvers + SA-MP reference servers + the target.
 

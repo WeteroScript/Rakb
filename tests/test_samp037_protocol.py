@@ -248,6 +248,9 @@ class MockServer:
                 except socket.timeout:
                     break
                 self.client_addr = _
+                if data[:4] == b"SAMP":
+                    self._answer_query(data)
+                    continue
                 try:
                     plain = samp_decode(data, self.port)
                 except ValueError:
@@ -259,6 +262,20 @@ class MockServer:
                     break
         finally:
             self.sock.close()
+
+    def _answer_query(self, data: bytes) -> None:
+        """Answer the plaintext SAMP query ('i' info opcode) used by /query and /selftest."""
+        if len(data) < 11:
+            return
+        opcode = data[10:11]
+        if opcode != b"i":
+            return
+        body = bytearray(data[:11])
+        body += bytes([0])                       # no password
+        body += struct.pack("<HH", 7, 100)       # players / maxplayers
+        for text in (b"Mock 0.3.7 Server", b"regression", b"English"):
+            body += struct.pack("<I", len(text)) + text
+        self.send_plain(bytes(body))
 
     def _step(self, plain: bytes) -> None:
         if not plain:
