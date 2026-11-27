@@ -545,7 +545,17 @@ def build_router(sup: RakSampSupervisor, admins: set[int]) -> Router:
                 extra = " — handshake accepted"
             elif r["cookie"]:
                 extra = " — cookie challenge seen"
+            elif r["unreachable"]:
+                extra = " — ICMP port-unreachable: host alive, nothing on this port"
+            elif r["handshake_error"] or r["query_error"]:
+                extra = f" — {html.escape(r['handshake_error'] or r['query_error'])} (no answer)"
             lines.append(f"{mark} {label} <code>{html.escape(r['host'])}:{r['port']}</code>{extra}")
+            # raw bytes for anything that answered: shows exactly where the
+            # exchange stalls instead of leaving it to guesswork
+            for step_label, sent, got in r.get("steps", []):
+                lines.append(f"     {html.escape(step_label)}: "
+                             f"<code>{sent.hex(' ')}</code> → "
+                             f"<code>{got.hex(' ') if got else 'no reply'}</code>")
         lines.append("")
         if res["project_replies"]:
             lines.append("🟢 This project does answer us — the join layer is the next thing to look at.")

@@ -274,19 +274,26 @@ async def compare(target_ip: str, target_port: int, extra: tuple[str, ...] = (),
     Read-only.
     """
     async def one(host: str, port: int, role: str) -> dict:
-        entry = {"host": host, "port": port, "role": role,
-                 "info": None, "accepted": False, "cookie": False}
+        entry = {"host": host, "port": port, "role": role, "info": None,
+                 "accepted": False, "cookie": False, "steps": [],
+                 "query_error": None, "handshake_error": None, "unreachable": False}
         try:
             entry["info"] = await query_server(host, port, timeout)
-        except Exception:
-            pass
+        except Exception as e:
+            entry["query_error"] = type(e).__name__
         loop = asyncio.get_running_loop()
         try:
             steps = await loop.run_in_executor(None, _handshake_sync, host, port, timeout)
+            entry["steps"] = steps
             entry["accepted"] = any(g and g[0] == 25 for _, _, g in steps)
             entry["cookie"] = any(g and g[0] == 26 for _, _, g in steps)
-        except Exception:
-            pass
+        except Exception as e:
+            entry["handshake_error"] = type(e).__name__
+        # A connected UDP socket reports ECONNREFUSED when an ICMP port-unreachable
+        # comes back: the host is alive and nothing listens on that port. A plain
+        # timeout means the packets were dropped with no answer at all.
+        entry["unreachable"] = "ConnectionRefusedError" in (
+            entry["query_error"] or "", entry["handshake_error"] or "")
         entry["any_reply"] = entry["info"] is not None or entry["accepted"] or entry["cookie"]
         return entry
 

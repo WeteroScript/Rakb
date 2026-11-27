@@ -62,7 +62,8 @@ def main() -> int:
     sampquery.REFERENCE_SERVERS = (("127.0.0.1", live),)
     try:
         dead_target = closed_port()
-        res = asyncio.run(sampquery.compare(dead_target, 5125, (closed_port(),), timeout=1.5))
+        res = asyncio.run(sampquery.compare("127.0.0.1", dead_target, ("127.0.0.1",),
+                                            timeout=1.5))
     finally:
         sampquery.REFERENCE_SERVERS = original
     srv.thread.join(timeout=10)
@@ -84,6 +85,19 @@ def main() -> int:
     srv2.thread.join(timeout=10)
     check("answering target -> project_replies", res2["project_replies"] is True)
     check("answering target accepted handshake", res2["target"]["accepted"] is True)
+    check("raw handshake steps carried for the bot output",
+          len(res2["target"]["steps"]) >= 2
+          and all(len(item) == 3 for item in res2["target"]["steps"]),
+          str(len(res2["target"]["steps"])))
+    # a closed local port answers with ICMP unreachable, which must be reported
+    # as such rather than lumped in with a filtered/timeout silence
+    check("silent target reports why it is silent",
+          bool(res["target"]["handshake_error"] or res["target"]["query_error"]
+               or res["target"]["steps"]),
+          f"query={res['target']['query_error']} hs={res['target']['handshake_error']}")
+    check("closed port flagged as ICMP unreachable", res["target"]["unreachable"] is True,
+          f"query={res['target']['query_error']} hs={res['target']['handshake_error']}")
+    check("answering server not flagged unreachable", res2["target"]["unreachable"] is False)
     check("all controls dead -> control_ok False", res2["control_ok"] is False)
 
     if _FAILURES:
